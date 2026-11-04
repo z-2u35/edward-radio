@@ -67,6 +67,8 @@ function buildYtDlpOptions(extraOptions = {}) {
         noCheckCertificates: true,
         noWarnings: true,
         preferFreeFormats: true,
+        // Nới lỏng định dạng âm thanh để tránh lỗi "Requested format is not available"
+        format: 'bestaudio/best', 
         ...extraOptions
     };
 
@@ -79,7 +81,6 @@ function buildYtDlpOptions(extraOptions = {}) {
 
     return options;
 }
-
 // ============================================================================
 // 2. OFFICIAL SPOTIFY WEB API & SCRAPER FALLBACK
 // ============================================================================
@@ -343,7 +344,6 @@ async function resolveTrackInfo(query) {
         throw new Error('Không thể tìm thấy bài hát. Vui lòng kiểm tra lại cookies.txt trên Render.');
     }
 }
-
 async function playTrack(track) {
     cleanupStreams();
     currentTrack = track;
