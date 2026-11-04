@@ -188,7 +188,7 @@ async function resolveLavalink(query) {
         throw new Error(`Lavalink resolve lỗi: ${result.data?.message || 'nguồn không khả dụng'}`);
       }
       if (result.loadType === 'search' || result.loadType === 'track') {
-        const track = result.loadType === 'track' ? result.data : result.data?.tracks?.[0];
+        const track = result.loadType === 'track' ? result.data : result.data?.[0];
         if (!track) throw new Error('Không tìm thấy bài hát.');
         return [track];
       }
