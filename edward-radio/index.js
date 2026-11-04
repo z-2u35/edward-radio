@@ -136,12 +136,12 @@ async function spotifyRequest(endpoint) {
 async function spotifyTracks(reference) {
   if (reference.type === 'track') {
     const track = await spotifyRequest(`tracks/${reference.id}`);
-    return {
+    return [{
       title: `${track.artists.map((artist) => artist.name).join(', ')} - ${track.name}`,
       query: `${track.artists.map((artist) => artist.name).join(', ')} - ${track.name} official audio`,
       duration: track.duration_ms,
       artworkUrl: track.album?.images?.[0]?.url || null
-    };
+    }];
   }
 
   const first = await spotifyRequest(`${reference.type}s/${reference.id}`);
@@ -173,9 +173,13 @@ async function resolveLavalink(query) {
   const node = shoukaku.getIdealNode();
   if (!node) throw new Error('Chưa kết nối được Lavalink.');
   const result = await node.rest.resolve(query);
-  if (!result?.data) throw new Error('Lavalink không tìm thấy kết quả.');
+  if (!result) throw new Error('Lavalink không trả về kết quả.');
+  if (result.loadType === 'empty') throw new Error('Lavalink không tìm thấy kết quả.');
+  if (result.loadType === 'error') {
+    throw new Error(`Lavalink resolve lỗi: ${result.data?.message || 'nguồn không khả dụng'}`);
+  }
   if (result.loadType === 'search' || result.loadType === 'track') {
-    const track = result.loadType === 'track' ? result.data : result.data[0];
+    const track = result.loadType === 'track' ? result.data : result.data?.tracks?.[0];
     if (!track) throw new Error('Không tìm thấy bài hát.');
     return [track];
   }
