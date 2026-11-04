@@ -270,10 +270,11 @@ async function resolveSearchTrack(query) {
 
 async function ensurePlayer(guild, channelId) {
   const state = stateFor(guild.id);
-  if (state.channelId && state.channelId !== channelId) {
+  const actualChannelId = guild.members.me?.voice?.channelId || null;
+  if (actualChannelId && actualChannelId !== channelId) {
     throw new Error('Bot đang ở một phòng thoại khác trong server này.');
   }
-  state.channelId = channelId;
+  if (actualChannelId === channelId || !actualChannelId) state.channelId = channelId;
   const existing = shoukaku.players.get(guild.id);
   if (existing) return existing;
   const player = await shoukaku.joinVoiceChannel({
@@ -654,6 +655,13 @@ client.on('messageCreate', async (message) => {
 });
 
 client.on('voiceStateUpdate', async (oldState, newState) => {
+  if (newState.member?.id === client.user?.id) {
+    const state = stateFor(newState.guild.id);
+    state.channelId = newState.channelId;
+    await saveState();
+    console.log(`[Voice:${newState.guild.id}] Bot chuyển sang: ${newState.channelId || 'không ở phòng thoại'}`);
+    return;
+  }
   if (!oldState.channelId || newState.channelId || oldState.channelId !== stateFor(oldState.guild.id).channelId) return;
   const state = stateFor(oldState.guild.id);
   if (state.stay247 && oldState.channel?.members.filter((member) => !member.user.bot).size === 0) {
