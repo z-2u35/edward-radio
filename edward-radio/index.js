@@ -66,7 +66,8 @@ function stateFor(guildId) {
       stay247: false,
       mode: 'queue',
       station: null,
-      playing: false
+      playing: false,
+      transitioning: false
     });
   }
 
@@ -273,12 +274,17 @@ async function ensurePlayer(guild, channelId) {
     await saveState();
   });
   player.on('end', async () => {
-    if (stateFor(guild.id).mode !== 'radio') await playNext(guild.id);
+    stateFor(guild.id).playing = false;
+    setTimeout(() => playNext(guild.id).catch((error) => {
+      console.error(`[Player:${guild.id}] Không thể phát track kế tiếp:`, error);
+    }), 100);
   });
   player.on('exception', async (error) => {
     console.error(`[Player:${guild.id}]`, error);
     stateFor(guild.id).playing = false;
-    await playNext(guild.id);
+    setTimeout(() => playNext(guild.id).catch((nextError) => {
+      console.error(`[Player:${guild.id}] Không thể phục hồi player:`, nextError);
+    }), 100);
   });
   player.on('stuck', async (threshold) => {
     console.warn(`[Player:${guild.id}] Kẹt sau ${threshold}ms.`);
@@ -288,37 +294,52 @@ async function ensurePlayer(guild, channelId) {
   return player;
 }
 
+async function playEncoded(player, encoded, volume) {
+  if (!encoded) throw new Error('Track Lavalink không có mã encoded.');
+  await player.playTrack({
+    track: { encoded },
+    volume: Math.max(1, Math.min(100, Number(volume) || DEFAULT_VOLUME))
+  });
+}
+
 async function playNext(guildId) {
   const state = stateFor(guildId);
   const player = shoukaku.players.get(guildId);
   if (!player) return;
-  if (state.mode === 'radio' && state.station) {
-    await player.playTrack({ track: { encoded: state.station.encoded }, volume: state.volume });
-    state.current = state.station;
+  if (state.transitioning) return;
+  state.transitioning = true;
+  try {
+    if (state.mode === 'radio' && state.station) {
+      await playEncoded(player, state.station.encoded, state.volume);
+      state.current = state.station;
+      state.playing = true;
+      await saveState();
+      return;
+    }
+    const next = state.queue[0];
+    if (!next) {
+      state.current = null;
+      state.playing = false;
+      await saveState();
+      return;
+    }
+    await playEncoded(player, next.encoded, state.volume);
+    state.queue.shift();
+    state.current = next;
     state.playing = true;
     await saveState();
-    return;
+  } finally {
+    state.transitioning = false;
   }
-  const next = state.queue[0];
-  if (!next) {
-    state.current = null;
-    state.playing = false;
-    await saveState();
-    return;
-  }
-  await player.playTrack({ track: { encoded: next.encoded }, volume: state.volume });
-  state.queue.shift();
-  state.current = next;
-  state.playing = true;
-  await saveState();
 }
 
-async function startRadio(guild, stationKey) {
+async function startRadio(guild, stationKey, channelId) {
   const station = RADIO_STATIONS[stationKey];
   if (!station?.url) throw new Error(`Radio "${stationKey}" chưa được cấu hình URL.`);
-  const player = await ensurePlayer(guild, stateFor(guild.id).channelId);
   const tracks = await resolveLavalink(station.url);
+  if (!tracks[0]?.encoded) throw new Error(`Radio "${station.name}" không trả về audio hợp lệ.`);
   const state = stateFor(guild.id);
+  const player = await ensurePlayer(guild, channelId);
   state.mode = 'radio';
   state.station = {
     encoded: tracks[0].encoded,
@@ -327,7 +348,7 @@ async function startRadio(guild, stationKey) {
     artworkUrl: tracks[0].info?.artworkUrl || null
   };
   state.queue = [];
-  await player.playTrack({ track: { encoded: state.station.encoded }, volume: state.volume });
+  await playEncoded(player, state.station.encoded, state.volume);
   state.current = state.station;
   state.playing = true;
   await saveState();
@@ -395,8 +416,7 @@ async function handlePlay(target, query) {
   const state = stateFor(guild.id);
   const radioKey = query.toLowerCase();
   if (RADIO_STATIONS[radioKey]) {
-    await ensurePlayer(guild, channel.id);
-    await startRadio(guild, radioKey);
+    await startRadio(guild, radioKey, channel.id);
     return reply(target, `📻 Đang phát **${RADIO_STATIONS[radioKey].name}**.`);
   }
 
@@ -406,12 +426,16 @@ async function handlePlay(target, query) {
     throw new Error(`Hàng đợi tối đa ${MAX_QUEUE_SIZE} bài.`);
   }
   for (const track of result.tracks) track.requester = target.user?.tag || target.author?.tag || 'Unknown';
-  await ensurePlayer(guild, channel.id);
+  const player = await ensurePlayer(guild, channel.id);
+  const replacingRadio = state.mode === 'radio' && state.playing;
   state.mode = 'queue';
   state.station = null;
   state.queue.push(...result.tracks);
-  const shouldStart = !state.playing;
-  if (shouldStart) await playNext(guild.id);
+  if (replacingRadio) {
+    state.playing = false;
+    await player.stopTrack();
+  }
+  if (!state.playing) await playNext(guild.id);
   await saveState();
   return reply(target, `✅ Đã thêm **${result.tracks.length}** bài vào hàng đợi. Tổng: **${duration(totalDuration(state))}**.`);
 }
