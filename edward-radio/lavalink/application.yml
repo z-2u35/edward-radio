@@ -5,7 +5,7 @@ server:
 lavalink:
   pluginsDir: "./plugins"
   server:
-    password: "CHANGE_ME"
+    password: EdwardLava_2026_X9pQ
     sources:
       youtube: false
       soundcloud: true
