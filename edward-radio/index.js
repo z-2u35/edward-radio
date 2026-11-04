@@ -424,7 +424,9 @@ async function handleCommand(target, command, args) {
   throw new Error('Lệnh không hợp lệ.');
 }
 
-shoukaku.on('error', (error, node) => console.error(`[Lavalink:${node?.name || 'unknown'}]`, error));
+shoukaku.on('error', (name, error) => {
+  console.error(`[Lavalink:${name}] ${error?.stack || error?.message || error}`);
+});
 shoukaku.on('disconnect', (name, count) => console.warn(`[Lavalink:${name}] Ngắt kết nối (${count}).`));
 shoukaku.on('ready', (name) => console.log(`[Lavalink:${name}] Sẵn sàng.`));
 shoukaku.on('debug', (message) => console.debug(`[Lavalink] ${message}`));
