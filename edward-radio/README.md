@@ -26,7 +26,27 @@ npm start
 
 ## Lavalink
 
-Lavalink phải cho phép kết nối từ service bot và dùng cùng `LAVALINK_PASSWORD`. Với Lavalink v4, cài plugin source phù hợp cho YouTube theo tài liệu Lavalink hiện hành; bot không chứa cơ chế vượt chặn hoặc cookie YouTube.
+Lavalink phải cho phép kết nối từ service bot và dùng cùng `LAVALINK_PASSWORD`.
+Mẫu cấu hình chuẩn nằm tại [`lavalink/application.yml.example`](./lavalink/application.yml.example).
+Lưu ý dependency YouTube phải nằm dưới `lavalink.plugins`; đặt ở cấp YAML root sẽ khiến Lavalink khởi động nhưng không nạp plugin.
+
+Chạy Lavalink trên cùng VM với bot:
+
+```bash
+sudo mkdir -p /opt/lavalink
+sudo cp lavalink/application.yml.example /opt/lavalink/application.yml
+# Sửa password trong /opt/lavalink/application.yml
+sudo docker run -d \
+  --name lavalink \
+  --restart unless-stopped \
+  -p 127.0.0.1:2333:2333 \
+  -v /opt/lavalink/application.yml:/opt/Lavalink/application.yml:ro \
+  -e _JAVA_OPTIONS="-Xms128M -Xmx420M" \
+  ghcr.io/lavalink-devs/lavalink:4
+```
+
+Sau khi khởi động, kiểm tra `docker logs lavalink` phải có `Lavalink is ready to accept connections`.
+Bot không chứa cơ chế vượt chặn hoặc cookie YouTube; hãy dùng plugin YouTube được cập nhật theo tài liệu Lavalink.
 
 ## Lệnh
 
