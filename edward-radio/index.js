@@ -7,7 +7,6 @@ const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 process.env.FFMPEG_PATH = ffmpegPath;
 
-// Dự phòng cho trường hợp bạn chưa kịp điền Spotify API Key
 const spotifyScraper = require('spotify-url-info')(global.fetch);
 
 process.on('unhandledRejection', error => {
@@ -42,17 +41,15 @@ const {
 const youtubedl = require('youtube-dl-exec');
 
 // ============================================================================
-// 1. CẤU HÌNH COOKIES CHO YT-DLP (GIẢI QUYẾT TRIỆT ĐỂ CHẶN IP TRÊN RENDER)
+// 1. CẤU HÌNH COOKIES CHO YT-DLP (VƯỢT CHẶN IP TRÊN RENDER)
 // ============================================================================
 function getCookiePath() {
-    // Render lưu Secret Files tại /etc/secrets/ hoặc thư mục gốc
     const renderSecretPath = '/etc/secrets/cookies.txt';
     const localCookiePath = path.join(__dirname, 'cookies.txt');
     const writableCookiePath = path.join('/tmp', 'yt_cookies.txt');
 
     try {
         if (fs.existsSync(renderSecretPath)) {
-            // Copy ra /tmp vì yt-dlp cần quyền ghi (write) lên file cookie sau khi đọc
             fs.copyFileSync(renderSecretPath, writableCookiePath);
             return writableCookiePath;
         }
@@ -84,7 +81,7 @@ function buildYtDlpOptions(extraOptions = {}) {
 }
 
 // ============================================================================
-// 2. HỆ THỐNG OFFICIAL SPOTIFY WEB API (CHÍNH XÁC 100% CA SĨ & THỜI LƯỢNG)
+// 2. OFFICIAL SPOTIFY WEB API & SCRAPER FALLBACK
 // ============================================================================
 let spotifyToken = null;
 let spotifyTokenExpiry = 0;
@@ -108,10 +105,7 @@ async function getSpotifyAccessToken() {
         body: 'grant_type=client_credentials'
     });
 
-    if (!res.ok) {
-        console.error('[Spotify API] Không thể lấy Access Token, kiểm tra lại Client ID/Secret.');
-        return null;
-    }
+    if (!res.ok) return null;
 
     const data = await res.json();
     spotifyToken = data.access_token;
@@ -120,14 +114,12 @@ async function getSpotifyAccessToken() {
 }
 
 async function resolveSpotifyUrl(url) {
-    // Bóc tách loại link (track, playlist, album) và ID từ URL Spotify
     const match = url.match(/spotify\.com\/(?:intl-[a-z]+\/)?(track|playlist|album)\/([a-zA-Z0-9]+)/);
     if (!match) throw new Error('Link Spotify không hợp lệ.');
 
     const [, type, id] = match;
     const token = await getSpotifyAccessToken();
 
-    // Nếu đã cấu hình SPOTIFY_CLIENT_ID và SPOTIFY_CLIENT_SECRET -> Dùng API chính thống
     if (token) {
         const headers = { 'Authorization': `Bearer ${token}` };
 
@@ -181,7 +173,7 @@ async function resolveSpotifyUrl(url) {
         }
     }
 
-    // Dự phòng nếu chưa cài API Key -> Dùng spotify-url-info (đã fix trường subtitle)
+    // Dự phòng qua scraper nếu chưa cấu hình API Key
     if (type === 'playlist' || type === 'album') {
         const playlistData = await spotifyScraper.getData(url);
         const rawTracks = playlistData.trackList || playlistData.tracks?.items || [];
@@ -228,7 +220,7 @@ async function resolveSpotifyUrl(url) {
 }
 
 // ============================================================================
-// 3. LOGIC BOT & STREAM ÂM THANH CHÍNH
+// 3. LOGIC XỬ LÝ ÂM THANH & BOT DISCORD
 // ============================================================================
 const STATIONS = {
     lofi: { name: '☕ Lofi Hip Hop Beats', url: 'https://streams.ilovemusic.de/iloveradio17.mp3', desc: 'Nhạc Lofi thư giãn, học bài & làm việc' },
@@ -348,7 +340,7 @@ async function resolveTrackInfo(query) {
         };
     } catch (err) {
         console.error('[Resolve Track Error]:', err.message);
-        throw new Error('Không thể trích xuất bài hát (Kiểm tra lại cookies.txt nếu chạy trên Render).');
+        throw new Error('Không thể tìm thấy bài hát. Vui lòng kiểm tra lại cookies.txt trên Render.');
     }
 }
 
@@ -485,7 +477,7 @@ async function registerCommands() {
         new SlashCommandBuilder()
             .setName('play')
             .setDescription('Phát nhạc từ YouTube, Spotify, SoundCloud hoặc Radio')
-            .addStringOption(opt => opt.setName('query').setDescription('Tên bài hát hoặc Link Spotify/YouTube/SoundCloud').setRequired(false))
+            .addStringOption(opt => opt.setName('query').setDescription('Tên bài hát hoặc Link Spotify/YouTube').setRequired(false))
             .addStringOption(opt => opt.setName('station').setDescription('Chọn đài Radio phát 24/7').setRequired(false).addChoices(...stationChoices)),
         new SlashCommandBuilder().setName('skip').setDescription('Bỏ qua bài hát hiện tại'),
         new SlashCommandBuilder().setName('queue').setDescription('Xem danh sách hàng đợi'),
@@ -501,7 +493,7 @@ async function registerCommands() {
 
 client.once('clientReady', async () => {
     console.log(`⚡ ${client.user.tag} đã sẵn sàng!`);
-    console.log(`🍪 Trạng thái Cookie YouTube: ${getCookiePath() ? 'Đã kích hoạt' : 'Chưa có (Khuyến nghị thêm cookies.txt trên Render)'}`);
+    console.log(`🍪 Trạng thái Cookie YouTube: ${getCookiePath() ? 'Đã kích hoạt' : 'Chưa có'}`);
     await registerCommands();
     if (botState.stay247 && botState.guildId && botState.channelId) {
         connectToVoice(botState.guildId, botState.channelId);
