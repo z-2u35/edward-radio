@@ -1,5 +1,4 @@
 require('dotenv').config();
-
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -7,7 +6,11 @@ const https = require('https');
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 process.env.FFMPEG_PATH = ffmpegPath;
-// Chống bot bị crash do lỗi mạng ngầm không bắt kịp
+
+// Hỗ trợ đọc thông tin link Spotify
+const getData = require('spotify-url-info')(https);
+
+// Chống bot bị crash do lỗi mạng ngầm
 process.on('unhandledRejection', error => {
     console.error('Lỗi ngoại lệ chưa được bắt (Unhandled Rejection):', error);
 });
@@ -15,6 +18,7 @@ process.on('unhandledRejection', error => {
 process.on('uncaughtException', error => {
     console.error('Lỗi nghiêm trọng (Uncaught Exception):', error);
 });
+
 const {
     Client,
     GatewayIntentBits,
@@ -23,9 +27,6 @@ const {
     Routes,
     SlashCommandBuilder,
     EmbedBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
     MessageFlags
 } = require('discord.js');
 const {
@@ -107,11 +108,10 @@ function cleanupStreams() {
 
 function playRadioStream() {
     cleanupStreams();
-
     const station = STATIONS[botState.station] || STATIONS.lofi;
     console.log(`[Edward ϟ Radio] Đang phát đài: ${station.name}`);
 
-    const clientProto = station.url.startsWith('https') ? https : hmessageCreatettp;
+    const clientProto = station.url.startsWith('https') ? https : http;
     const req = clientProto.get(station.url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
         currentHttpReq = req;
         ffmpegProcess = spawn(ffmpegPath, ['-i', 'pipe:0', '-analyzeduration', '0', '-loglevel', 'warning', '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'], { windowsHide: true });
@@ -128,18 +128,43 @@ function playRadioStream() {
     });
     
     req.on('error', (err) => {
-        console.error(`[Edward ϟ Radio] Lỗi kết nối đài: ${err.message}`);
         if (botState.isPlaying && botState.mode === 'radio') {
             retryTimeout = setTimeout(() => playRadioStream(), 6000);
         }
     });
 }
 
-// Hàm lấy thông tin bài hát thông minh (Hỗ trợ Link YouTube, SoundCloud, hoặc Từ khóa)
+// 🌟 HÀM XỬ LÝ THÔNG MINH ĐA NỀN TẢNG (YOUTUBE, SOUNDCLOUD, SPOTIFY)
+// 🌟 HÀM XỬ LÝ THÔNG MINH ĐÃ TỐI ƯU HÓA LINK SPOTIFY & YOUTUBE
 async function resolveTrackInfo(query) {
     let searchTarget = query;
-    // Kiểm tra nếu không phải URL thì dùng cú pháp tìm kiếm an toàn
-    if (!query.startsWith('http://') && !query.startsWith('https://')) {
+
+    // Nếu là link Spotify, ta lấy trực tiếp chuỗi URL để bot tự xử lý hoặc tìm kiếm an toàn
+    if (query.includes('spotify.com')) {
+        // Trích xuất đoạn mã định danh hoặc dùng từ khóa tổng quát nếu cần, 
+        // nhưng để đơn giản và chắc chắn không bị lỗi thư viện mạng, ta truyền trực tiếp query hoặc tên qua yt-dlp
+        // Hoặc bạn có thể dùng fetch trực tiếp trang oEmbed công khai của Spotify hoàn toàn không cần thư viện ngoài:
+        try {
+            const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(query)}`;
+            const res = await new Promise((resolve, reject) => {
+                https.get(oembedUrl, (resp) => {
+                    let data = '';
+                    resp.on('data', chunk => data += chunk);
+                    resp.on('end', () => {
+                        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+                    });
+                }).on('error', reject);
+            });
+            
+            if (res && res.title) {
+                // Lấy tiêu đề bài hát từ Spotify (Ví dụ: "Tìm Em (feat. Bảo Anh) - Hngle") để tìm kiếm chính xác trên YouTube
+                searchTarget = `ytsearch1:${res.title}`;
+            }
+        } catch (e) {
+            console.error('[Spotify OEmbed Error]:', e.message);
+        }
+    } 
+    else if (!query.startsWith('http://') && !query.startsWith('https://')) {
         searchTarget = `ytsearch1:${query}`;
     }
 
@@ -149,7 +174,10 @@ async function resolveTrackInfo(query) {
             noCheckCertificates: true,
             noWarnings: true,
             preferFreeFormats: true,
-            addHeader: ['user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)']
+            extractorArgs: 'youtube:player_client=android,web',
+            addHeader: [
+                'user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            ]
         });
 
         return {
@@ -161,7 +189,6 @@ async function resolveTrackInfo(query) {
         throw new Error('Không thể tìm thấy hoặc trích xuất bài hát.');
     }
 }
-
 async function playTrack(track) {
     cleanupStreams();
     currentTrack = track;
@@ -174,7 +201,8 @@ async function playTrack(track) {
             format: 'bestaudio/best',
             noCheckCertificates: true,
             noWarnings: true,
-            preferFreeFormats: true
+            preferFreeFormats: true,
+            extractorArgs: 'youtube:player_client=android,web'
         });
 
         const finalUrl = typeof streamUrl === 'string' ? streamUrl.trim().split('\n')[0] : track.url;
@@ -192,10 +220,6 @@ async function playTrack(track) {
             '-ac', '2',
             'pipe:1'
         ], { windowsHide: true });
-
-        ffmpegProcess.on('error', (err) => {
-            console.error('[FFmpeg Process Error]:', err.message);
-        });
 
         currentResource = createAudioResource(ffmpegProcess.stdout, { 
             inputType: StreamType.Raw, 
@@ -272,9 +296,9 @@ async function registerCommands() {
     const commands = [
         new SlashCommandBuilder()
             .setName('play')
-            .setDescription('Phát nhạc từ YouTube, SoundCloud, Link hoặc Đài Radio')
-            .addStringOption(opt => opt.setName('query').setDescription('Tên bài hát, từ khóa hoặc link nhạc').setRequired(false))
-            .addStringOption(opt => opt.setName('station').setDescription('Hoặc chọn đài Radio phát 24/7').setRequired(false).addChoices(...stationChoices)),
+            .setDescription('Phát nhạc từ YouTube, Spotify, SoundCloud, Link hoặc Radio')
+            .addStringOption(opt => opt.setName('query').setDescription('Tên bài hát, Link YouTube / Spotify / SoundCloud').setRequired(false))
+            .addStringOption(opt => opt.setName('station').setDescription('Chọn đài Radio phát 24/7').setRequired(false).addChoices(...stationChoices)),
         new SlashCommandBuilder().setName('skip').setDescription('Bỏ qua bài hát hiện tại'),
         new SlashCommandBuilder().setName('queue').setDescription('Xem danh sách hàng đợi'),
         new SlashCommandBuilder().setName('volume').setDescription('Chỉnh âm lượng (1-100)').addIntegerOption(opt => opt.setName('mức').setDescription('1-100').setMinValue(1).setMaxValue(100).setRequired(true)),
@@ -283,7 +307,7 @@ async function registerCommands() {
             .setName('playlist')
             .setDescription('Quản lý playlist cá nhân')
             .addSubcommand(sub => sub.setName('create').setDescription('Tạo playlist mới').addStringOption(opt => opt.setName('tên').setDescription('Tên playlist').setRequired(true)))
-            .addSubcommand(sub => sub.setName('add').setDescription('Thêm bài vào playlist').addStringOption(opt => opt.setName('tên').setDescription('Tên playlist').setRequired(true)).addStringOption(opt => opt.setName('query').setDescription('Tên bài hát hoặc link').setRequired(true)))
+            .addSubcommand(sub => sub.setName('add').setDescription('Thêm bài vào playlist').addStringOption(opt => opt.setName('tên').setDescription('Tên playlist').setRequired(true)).addStringOption(opt => opt.setName('query').setDescription('Tên hoặc link Spotify/SoundCloud').setRequired(true)))
             .addSubcommand(sub => sub.setName('play').setDescription('Phát playlist').addStringOption(opt => opt.setName('tên').setDescription('Tên playlist').setRequired(true)))
             .addSubcommand(sub => sub.setName('list').setDescription('Xem danh sách playlist')),
         new SlashCommandBuilder().setName('stop').setDescription('Dừng nhạc và rời phòng')
@@ -342,7 +366,7 @@ client.on('messageCreate', async message => {
                 return message.reply(`➕ Đã thêm vào hàng đợi: **${track.title}** (Vị trí #${queue.length})`);
             }
         } catch (e) {
-            return message.reply('❌ Không tìm thấy bài hát yêu cầu hoặc link không hỗ trợ!');
+            return message.reply('❌ Không tìm thấy bài hát hoặc link không được hỗ trợ!');
         }
     }
 
@@ -371,19 +395,7 @@ client.on('messageCreate', async message => {
     if (command === '247') {
         botState.stay247 = !botState.stay247;
         saveData();
-        return message.reply(
-            botState.stay247
-                ? '🟢 **Đã BẬT chế độ 24/7!**'
-                : '🔴 **Đã TẮT chế độ 24/7!**'
-        );
-    }
-
-    if (command === 'np') {
-        const station = STATIONS[botState.station] || STATIONS.lofi;
-        const embed = new EmbedBuilder()
-            .setColor('#8E44AD')
-            .setTitle(botState.mode === 'queue' && currentTrack ? `Đang phát: ${currentTrack.title}` : `Đang phát đài: ${station.name}`);
-        return message.reply({ embeds: [embed] });
+        return message.reply(botState.stay247 ? '🟢 Đã BẬT 24/7!' : '🔴 Đã TẮT 24/7!');
     }
 
     if (command === 'stop') {
@@ -397,7 +409,7 @@ client.on('messageCreate', async message => {
         player.stop();
         const conn = getVoiceConnection(message.guild.id);
         if (conn) conn.destroy();
-        return message.reply('👋 Đã dừng nhạc và rời phòng!');
+        return message.reply('👋 Đã dừng nhạc!');
     }
 });
 
@@ -469,49 +481,6 @@ client.on('interactionCreate', async interaction => {
         botState.stay247 = !botState.stay247;
         saveData();
         return interaction.reply(botState.stay247 ? '🟢 Đã BẬT 24/7!' : '🔴 Đã TẮT 24/7!');
-    }
-
-    if (commandName === 'playlist') {
-        const sub = interaction.options.getSubcommand();
-        const userId = interaction.user.id;
-        if (!userPlaylists[userId]) userPlaylists[userId] = {};
-
-        if (sub === 'create') {
-            const name = interaction.options.getString('tên');
-            userPlaylists[userId][name] = [];
-            saveData();
-            return interaction.reply(`📁 Đã tạo playlist **${name}**!`);
-        }
-        if (sub === 'add') {
-            const name = interaction.options.getString('tên');
-            const query = interaction.options.getString('query');
-            await interaction.deferReply();
-            try {
-                const trackInfo = await resolveTrackInfo(query);
-                userPlaylists[userId][name].push({ title: trackInfo.title, url: trackInfo.url });
-                saveData();
-                return interaction.editReply(`✅ Đã thêm **${trackInfo.title}** vào playlist **${name}**.`);
-            } catch (e) {
-                return interaction.editReply('❌ Không thể thêm vào playlist.');
-            }
-        }
-        if (sub === 'list') {
-            const lists = Object.keys(userPlaylists[userId]);
-            if (lists.length === 0) return interaction.reply('📭 Chưa có playlist nào.');
-            const desc = lists.map(l => `• **${l}**`).join('\n');
-            return interaction.reply({ embeds: [new EmbedBuilder().setTitle('📚 Playlist').setDescription(desc)] });
-        }
-        if (sub === 'play') {
-            const name = interaction.options.getString('tên');
-            const pl = userPlaylists[userId][name];
-            if (!pl || pl.length === 0) return interaction.reply({ content: '❌ Playlist trống!', flags: MessageFlags.Ephemeral });
-            const userVoice = interaction.member.voice.channel;
-            await interaction.deferReply();
-            await connectToVoice(interaction.guild.id, userVoice.id);
-            queue.push(...pl);
-            if (botState.mode !== 'queue') playNextInQueue();
-            return interaction.editReply(`🎶 Đã nạp **${pl.length} bài** từ playlist **${name}**!`);
-        }
     }
 
     if (commandName === 'stop') {
