@@ -9,7 +9,7 @@ Discord Music Bot dùng **Discord.js v14 + Lavalink v4 + Shoukaku**. Lavalink đ
 - Queue, shuffle, skip, tổng thời lượng, volume 1-100 và tự động chuyển bài.
 - Radio Lofi, Chillsynth, Smooth Jazz, Peaceful Piano qua URL stream cấu hình trong `.env`.
 - Chế độ treo phòng 24/7 và lưu trạng thái vào `state.json`.
-- Slash commands và prefix aliases: `edp`, `edsf`, `eds`, `edq`, `edt`, `edvol`, `ed247`, `edstop`.
+- Slash commands và prefix aliases: `edp`, `edsf`, `eds`, `edq`, `eddlall`, `eddl <n>`, `edt`, `edvol`, `ed247`, `edstop`.
 
 ## Cài đặt
 
@@ -68,8 +68,12 @@ Kết quả phải có `"loadType":"search"`. Nếu là `empty` hoặc `error`, 
 | `/play mode:queue query:<query>` | Thêm tên bài, URL YouTube hoặc Spotify vào queue |
 | `/play mode:station station:<station>` | Phát `lofi`, `chillsynth`, `jazz` hoặc `piano` |
 | `/shuffle`, `/skip`, `/queue`, `/total` | Quản lý hàng đợi |
+| `/deleteall` | Xóa toàn bộ bài đang chờ, không dừng bài hiện tại |
+| `/delete position:<n>` | Xóa bài ở vị trí `n` trong hàng đợi |
 | `/volume <1-100>` | Chỉnh âm lượng |
 | `/247` | Bật/tắt treo phòng |
 | `/stop` | Dừng và rời phòng |
+
+Prefix tương ứng: `eddlall` xóa toàn bộ queue, `eddl <n>` xóa bài ở vị trí `n`.
 
 Khi thêm playlist Spotify, bot lấy toàn bộ các trang track từ Spotify Web API, resolve từng bài qua Lavalink và báo rõ số bài đã thêm cùng các bài không resolve được.

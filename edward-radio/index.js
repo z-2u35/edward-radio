@@ -283,7 +283,9 @@ async function ensurePlayer(guild, channelId) {
     mute: false
   });
   player.on('start', async () => {
+    const current = stateFor(guild.id).current;
     stateFor(guild.id).playing = true;
+    console.log(`[Player:${guild.id}] Bắt đầu phát: ${current?.title || 'track không có metadata'}`);
     await saveState();
   });
   player.on('end', async () => {
@@ -293,7 +295,7 @@ async function ensurePlayer(guild, channelId) {
     }), 100);
   });
   player.on('exception', async (error) => {
-    console.error(`[Player:${guild.id}]`, error);
+    console.error(`[Player:${guild.id}] Track exception:`, error);
     stateFor(guild.id).playing = false;
     setTimeout(() => playNext(guild.id).catch((nextError) => {
       console.error(`[Player:${guild.id}] Không thể phục hồi player:`, nextError);
@@ -304,15 +306,21 @@ async function ensurePlayer(guild, channelId) {
     await player.stopTrack();
   });
   player.on('closed', (reason) => console.warn(`[Player:${guild.id}] Đóng:`, reason));
+  player.on('update', (data) => {
+    const position = data.state?.position || 0;
+    if (position === 0 || position % 30_000 < 1_000) {
+      console.log(`[Player:${guild.id}] Voice update: position=${position}ms, ping=${data.state?.ping ?? player.ping}ms, connected=${data.state?.connected}`);
+    }
+  });
   return player;
 }
 
 async function playEncoded(player, encoded, volume) {
   if (!encoded) throw new Error('Track Lavalink không có mã encoded.');
   await player.playTrack({
-    track: { encoded },
-    volume: Math.max(1, Math.min(100, Number(volume) || DEFAULT_VOLUME))
+    track: { encoded }
   });
+  await player.setGlobalVolume(Math.max(1, Math.min(100, Number(volume) || DEFAULT_VOLUME)));
 }
 
 async function playNext(guildId) {
@@ -323,9 +331,9 @@ async function playNext(guildId) {
   state.transitioning = true;
   try {
     if (state.mode === 'radio' && state.station) {
-      await playEncoded(player, state.station.encoded, state.volume);
       state.current = state.station;
-      state.playing = true;
+      await playEncoded(player, state.station.encoded, state.volume);
+      state.playing = false;
       await saveState();
       return;
     }
@@ -336,10 +344,10 @@ async function playNext(guildId) {
       await saveState();
       return;
     }
+    state.current = next;
     await playEncoded(player, next.encoded, state.volume);
     state.queue.shift();
-    state.current = next;
-    state.playing = true;
+    state.playing = false;
     await saveState();
   } finally {
     state.transitioning = false;
@@ -361,9 +369,9 @@ async function startRadio(guild, stationKey, channelId) {
     artworkUrl: tracks[0].info?.artworkUrl || null
   };
   state.queue = [];
-  await playEncoded(player, state.station.encoded, state.volume);
   state.current = state.station;
-  state.playing = true;
+  await playEncoded(player, state.station.encoded, state.volume);
+  state.playing = false;
   await saveState();
 }
 
@@ -414,6 +422,9 @@ function commandBuilders() {
     new SlashCommandBuilder().setName('shuffle').setDescription('Tráo hàng đợi'),
     new SlashCommandBuilder().setName('skip').setDescription('Bỏ qua bài hiện tại'),
     new SlashCommandBuilder().setName('queue').setDescription('Xem hàng đợi'),
+    new SlashCommandBuilder().setName('deleteall').setDescription('Xóa toàn bộ bài đang chờ trong hàng đợi'),
+    new SlashCommandBuilder().setName('delete').setDescription('Xóa bài theo vị trí trong hàng đợi')
+      .addIntegerOption((option) => option.setName('position').setDescription('Vị trí bài trong queue, bắt đầu từ 1').setMinValue(1).setRequired(true)),
     new SlashCommandBuilder().setName('total').setDescription('Xem tổng thời lượng'),
     new SlashCommandBuilder().setName('volume').setDescription('Chỉnh âm lượng')
       .addIntegerOption((option) => option.setName('value').setDescription('1-100').setMinValue(1).setMaxValue(100).setRequired(true)),
@@ -494,6 +505,23 @@ async function handleCommand(target, command, args) {
     const lines = state.queue.slice(0, 15).map((track, index) => `${index + 1}. ${track.title} (${duration(track.duration)})`);
     return reply(target, lines.length ? `🎶 **Hàng đợi**\n${lines.join('\n')}` : 'Hàng đợi đang trống.');
   }
+  if (command === 'deleteall') {
+    const removed = state.queue.length;
+    state.queue = [];
+    await saveState();
+    return reply(target, removed
+      ? `🗑️ Đã xóa **${removed}** bài đang chờ. Bài hiện tại vẫn được phát.`
+      : 'Hàng đợi đang trống.');
+  }
+  if (command === 'delete') {
+    const position = Number.parseInt(args[0], 10);
+    if (!Number.isInteger(position) || position < 1 || position > state.queue.length) {
+      throw new Error(`Vị trí phải từ 1 đến ${state.queue.length}.`);
+    }
+    const [removed] = state.queue.splice(position - 1, 1);
+    await saveState();
+    return reply(target, `🗑️ Đã xóa bài số **${position}**: **${removed.title}**.`);
+  }
   if (command === 'total') return reply(target, `⏱️ Tổng thời lượng: **${duration(totalDuration(state))}**.`);
   if (command === 'volume') {
     const value = Number.parseInt(args[0], 10);
@@ -551,6 +579,8 @@ client.on('interactionCreate', async (interaction) => {
       ? [interaction.options.getString('query') || interaction.options.getString('station')]
       : interaction.commandName === 'volume'
         ? [String(interaction.options.getInteger('value', true))]
+        : interaction.commandName === 'delete'
+          ? [String(interaction.options.getInteger('position', true))]
         : [];
     if (interaction.commandName === 'play') {
       await handlePlay(
@@ -571,7 +601,18 @@ client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild || !message.content.toLowerCase().startsWith(PREFIX)) return;
   const parts = message.content.slice(PREFIX.length).trim().split(/\s+/);
   const command = (parts.shift() || '').toLowerCase();
-  const aliases = { edp: 'play', edsf: 'shuffle', eds: 'skip', edq: 'queue', edt: 'total', edvol: 'volume', ed247: '247', edstop: 'stop' };
+  const aliases = {
+    edp: 'play',
+    edsf: 'shuffle',
+    eds: 'skip',
+    edq: 'queue',
+    eddlall: 'deleteall',
+    eddl: 'delete',
+    edt: 'total',
+    edvol: 'volume',
+    ed247: '247',
+    edstop: 'stop'
+  };
   const normalized = aliases[`${PREFIX}${command}`] || aliases[command] || command;
   try {
     await handleCommand(message, normalized, parts);
