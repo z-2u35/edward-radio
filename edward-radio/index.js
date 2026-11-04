@@ -111,7 +111,7 @@ function playRadioStream() {
     const station = STATIONS[botState.station] || STATIONS.lofi;
     console.log(`[Edward ϟ Radio] Đang phát đài: ${station.name}`);
 
-    const clientProto = station.url.startsWith('https') ? https : http;
+    const clientProto = station.url.startsWith('https') ? https : hmessageCreatettp;
     const req = clientProto.get(station.url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
         currentHttpReq = req;
         ffmpegProcess = spawn(ffmpegPath, ['-i', 'pipe:0', '-analyzeduration', '0', '-loglevel', 'warning', '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'], { windowsHide: true });
