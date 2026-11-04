@@ -67,7 +67,8 @@ function stateFor(guildId) {
       mode: 'queue',
       station: null,
       playing: false,
-      transitioning: false
+      transitioning: false,
+      textChannelId: null
     });
   }
 
@@ -283,13 +284,24 @@ async function ensurePlayer(guild, channelId) {
     mute: false
   });
   player.on('start', async () => {
-    const current = stateFor(guild.id).current;
-    stateFor(guild.id).playing = true;
+    const currentState = stateFor(guild.id);
+    const current = currentState.current;
+    currentState.playing = true;
     console.log(`[Player:${guild.id}] Bắt đầu phát: ${current?.title || 'track không có metadata'}`);
+    if (currentState.textChannelId && current) {
+      const channel = await client.channels.fetch(currentState.textChannelId).catch(() => null);
+      if (channel?.isTextBased()) {
+        await channel.send(`▶️ Đang phát: **${current.title}**`).catch((error) => {
+          console.warn(`[Player:${guild.id}] Không thể gửi Now Playing: ${error.message}`);
+        });
+      }
+    }
     await saveState();
   });
-  player.on('end', async () => {
-    stateFor(guild.id).playing = false;
+  player.on('end', async (data) => {
+    const state = stateFor(guild.id);
+    console.log(`[Player:${guild.id}] Track kết thúc: ${data?.reason || 'unknown'}`);
+    state.playing = false;
     setTimeout(() => playNext(guild.id).catch((error) => {
       console.error(`[Player:${guild.id}] Không thể phát track kế tiếp:`, error);
     }), 100);
@@ -322,6 +334,7 @@ async function playEncoded(player, encoded, volume) {
     track: { encoded }
   });
   await player.setGlobalVolume(Math.max(1, Math.min(100, Number(volume) || DEFAULT_VOLUME)));
+  stateFor(player.guildId).playing = true;
   console.log(`[Player:${player.guildId}] Lavalink đã nhận track.`);
 }
 
@@ -335,7 +348,7 @@ async function playNext(guildId) {
     if (state.mode === 'radio' && state.station) {
       state.current = state.station;
       await playEncoded(player, state.station.encoded, state.volume);
-      state.playing = false;
+      state.playing = true;
       await saveState();
       return;
     }
@@ -373,7 +386,7 @@ async function startRadio(guild, stationKey, channelId) {
   state.queue = [];
   state.current = state.station;
   await playEncoded(player, state.station.encoded, state.volume);
-  state.playing = false;
+  state.playing = true;
   await saveState();
 }
 
@@ -462,6 +475,7 @@ async function handlePlay(target, query, mode = 'queue') {
   const guild = target.guild;
   const channel = voiceChannel(target);
   const state = stateFor(guild.id);
+  state.textChannelId = target.channel?.id || state.textChannelId;
   if (mode === 'station') {
     const radioKey = query?.toLowerCase();
     if (!RADIO_STATIONS[radioKey]) {
@@ -498,6 +512,7 @@ async function handlePlay(target, query, mode = 'queue') {
 
 async function handleCommand(target, command, args) {
   const state = stateFor(target.guild.id);
+  state.textChannelId = target.channel?.id || state.textChannelId;
   if (command === 'play' || command === 'p') return handlePlay(target, args.join(' '), 'queue');
   if (command === 'shuffle') {
     for (let index = state.queue.length - 1; index > 0; index -= 1) {
@@ -515,7 +530,11 @@ async function handleCommand(target, command, args) {
   }
   if (command === 'queue') {
     const lines = state.queue.slice(0, 15).map((track, index) => `${index + 1}. ${track.title} (${duration(track.duration)})`);
-    return reply(target, lines.length ? `🎶 **Hàng đợi**\n${lines.join('\n')}` : 'Hàng đợi đang trống.');
+    const currentLine = state.current
+      ? `▶️ Đang phát: **${state.current.title}** (${duration(state.current.duration)})`
+      : '';
+    if (!lines.length && !currentLine) return reply(target, 'Hàng đợi đang trống.');
+    return reply(target, `🎶 **Hàng đợi**${currentLine ? `\n${currentLine}` : ''}${lines.length ? `\n${lines.join('\n')}` : ''}`);
   }
   if (command === 'deleteall') {
     const removed = state.queue.length;
