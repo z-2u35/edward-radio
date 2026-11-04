@@ -61,8 +61,11 @@ Kết quả phải có `"loadType":"search"`. Nếu là `empty` hoặc `error`, 
 
 | Lệnh | Tác dụng |
 | --- | --- |
-| `/play <query>` | Phát tên, URL, Spotify hoặc `lofi`, `chillsynth`, `jazz`, `piano` |
+| `/play mode:queue query:<query>` | Thêm tên bài, URL YouTube hoặc Spotify vào queue |
+| `/play mode:station station:<station>` | Phát `lofi`, `chillsynth`, `jazz` hoặc `piano` |
 | `/shuffle`, `/skip`, `/queue`, `/total` | Quản lý hàng đợi |
 | `/volume <1-100>` | Chỉnh âm lượng |
 | `/247` | Bật/tắt treo phòng |
 | `/stop` | Dừng và rời phòng |
+
+Khi thêm playlist Spotify, bot lấy toàn bộ các trang track từ Spotify Web API, resolve từng bài qua Lavalink và báo rõ số bài đã thêm cùng các bài không resolve được.

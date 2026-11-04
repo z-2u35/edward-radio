@@ -208,9 +208,14 @@ async function resolveRequest(input) {
     if (!reference) throw new Error('Link Spotify không hợp lệ.');
     const spotifyItems = await spotifyTracks(reference);
     const resolved = [];
+    const skipped = [];
     for (const item of spotifyItems) {
-      const tracks = await resolveSearchTrack(item.query);
-      if (tracks[0]) {
+      try {
+        const tracks = await resolveSearchTrack(item.query);
+        if (!tracks[0]) {
+          skipped.push(item.title);
+          continue;
+        }
         resolved.push({
           encoded: tracks[0].encoded,
           title: item.title,
@@ -219,9 +224,16 @@ async function resolveRequest(input) {
           artworkUrl: item.artworkUrl,
           requester: null
         });
+      } catch (error) {
+        skipped.push(item.title);
+        console.warn(`[Spotify] Bỏ qua "${item.title}": ${error.message}`);
       }
     }
-    return { tracks: resolved, playlistName: reference.type === 'track' ? null : 'Spotify collection' };
+    return {
+      tracks: resolved,
+      skipped,
+      playlistName: reference.type === 'track' ? null : 'Spotify collection'
+    };
   }
 
   const tracks = isUrl(input)
@@ -236,7 +248,8 @@ async function resolveRequest(input) {
       artworkUrl: track.info?.artworkUrl || null,
       requester: null
     })),
-    playlistName: tracks.length > 1 ? 'Playlist' : null
+    playlistName: tracks.length > 1 ? 'Playlist' : null,
+    skipped: []
   };
 }
 
@@ -385,7 +398,19 @@ function voiceChannel(interaction) {
 function commandBuilders() {
   return [
     new SlashCommandBuilder().setName('play').setDescription('Phát bài hát, playlist, Spotify hoặc radio')
-      .addStringOption((option) => option.setName('query').setDescription('Tên, URL hoặc lofi/chillsynth/jazz/piano').setRequired(true)),
+      .addStringOption((option) => option.setName('mode').setDescription('Chế độ phát').setRequired(true)
+        .addChoices(
+          { name: 'Queue - bài hát/playlist/Spotify', value: 'queue' },
+          { name: 'Station - radio 24/7', value: 'station' }
+        ))
+      .addStringOption((option) => option.setName('query').setDescription('Tên bài hát, URL YouTube hoặc Spotify').setRequired(false))
+      .addStringOption((option) => option.setName('station').setDescription('Trạm radio').setRequired(false)
+        .addChoices(
+          { name: 'Lofi Hip Hop', value: 'lofi' },
+          { name: 'Chillsynth', value: 'chillsynth' },
+          { name: 'Smooth Jazz', value: 'jazz' },
+          { name: 'Peaceful Piano', value: 'piano' }
+        )),
     new SlashCommandBuilder().setName('shuffle').setDescription('Tráo hàng đợi'),
     new SlashCommandBuilder().setName('skip').setDescription('Bỏ qua bài hiện tại'),
     new SlashCommandBuilder().setName('queue').setDescription('Xem hàng đợi'),
@@ -410,15 +435,19 @@ async function reply(target, content) {
   return target.reply(content);
 }
 
-async function handlePlay(target, query) {
+async function handlePlay(target, query, mode = 'queue') {
   const guild = target.guild;
   const channel = voiceChannel(target);
   const state = stateFor(guild.id);
-  const radioKey = query.toLowerCase();
-  if (RADIO_STATIONS[radioKey]) {
+  if (mode === 'station') {
+    const radioKey = query?.toLowerCase();
+    if (!RADIO_STATIONS[radioKey]) {
+      throw new Error('Chọn một station: lofi, chillsynth, jazz hoặc piano.');
+    }
     await startRadio(guild, radioKey, channel.id);
     return reply(target, `📻 Đang phát **${RADIO_STATIONS[radioKey].name}**.`);
   }
+  if (!query?.trim()) throw new Error('Nhập tên bài hát hoặc URL để thêm vào queue.');
 
   const result = await resolveRequest(query);
   if (!result.tracks.length) throw new Error('Không có bài hát hợp lệ trong yêu cầu.');
@@ -437,12 +466,16 @@ async function handlePlay(target, query) {
   }
   if (!state.playing) await playNext(guild.id);
   await saveState();
-  return reply(target, `✅ Đã thêm **${result.tracks.length}** bài vào hàng đợi. Tổng: **${duration(totalDuration(state))}**.`);
+  const addedNames = result.tracks.slice(0, 10).map((track) => `• ${track.title}`).join('\n');
+  const skippedText = result.skipped?.length
+    ? `\n⚠️ Bỏ qua ${result.skipped.length} bài không resolve được.`
+    : '';
+  return reply(target, `✅ Đã thêm **${result.tracks.length}** bài vào hàng đợi:\n${addedNames}${skippedText}\nTổng: **${duration(totalDuration(state))}**.`);
 }
 
 async function handleCommand(target, command, args) {
   const state = stateFor(target.guild.id);
-  if (command === 'play' || command === 'p') return handlePlay(target, args.join(' '));
+  if (command === 'play' || command === 'p') return handlePlay(target, args.join(' '), 'queue');
   if (command === 'shuffle') {
     for (let index = state.queue.length - 1; index > 0; index -= 1) {
       const random = Math.floor(Math.random() * (index + 1));
@@ -515,11 +548,19 @@ client.on('interactionCreate', async (interaction) => {
   try {
     await interaction.deferReply();
     const args = interaction.commandName === 'play'
-      ? [interaction.options.getString('query', true)]
+      ? [interaction.options.getString('query') || interaction.options.getString('station')]
       : interaction.commandName === 'volume'
         ? [String(interaction.options.getInteger('value', true))]
         : [];
-    await handleCommand(interaction, interaction.commandName, args);
+    if (interaction.commandName === 'play') {
+      await handlePlay(
+        interaction,
+        args[0],
+        interaction.options.getString('mode', true)
+      );
+    } else {
+      await handleCommand(interaction, interaction.commandName, args);
+    }
   } catch (error) {
     console.error('[Interaction]', error);
     await reply(interaction, `❌ ${error.message || 'Đã xảy ra lỗi.'}`);
