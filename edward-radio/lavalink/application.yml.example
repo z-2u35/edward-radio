@@ -3,6 +3,7 @@ server:
   port: 2333
 
 lavalink:
+  pluginsDir: "./plugins"
   server:
     password: "CHANGE_ME"
     sources:

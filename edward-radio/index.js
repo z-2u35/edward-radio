@@ -18,6 +18,7 @@ const PREFIX = process.env.PREFIX || 'ed';
 const STATE_FILE = path.resolve(process.env.STATE_FILE || 'state.json');
 const MAX_QUEUE_SIZE = Number.parseInt(process.env.MAX_QUEUE_SIZE || '500', 10);
 const DEFAULT_VOLUME = 70;
+const LAVALINK_RETRIES = 3;
 
 const RADIO_STATIONS = {
   lofi: { name: 'Lofi Hip Hop', url: process.env.RADIO_LOFI_URL },
@@ -170,21 +171,30 @@ async function spotifyTracks(reference) {
 }
 
 async function resolveLavalink(query) {
-  const node = shoukaku.getIdealNode();
-  if (!node) throw new Error('Chưa kết nối được Lavalink.');
-  const result = await node.rest.resolve(query);
-  if (!result) throw new Error('Lavalink không trả về kết quả.');
-  if (result.loadType === 'empty') throw new Error('Lavalink không tìm thấy kết quả.');
-  if (result.loadType === 'error') {
-    throw new Error(`Lavalink resolve lỗi: ${result.data?.message || 'nguồn không khả dụng'}`);
+  let lastError = null;
+  for (let attempt = 1; attempt <= LAVALINK_RETRIES; attempt += 1) {
+    try {
+      const node = shoukaku.getIdealNode();
+      if (!node) throw new Error('Chưa kết nối được Lavalink.');
+      const result = await node.rest.resolve(query);
+      if (!result) throw new Error('Lavalink không trả về kết quả.');
+      if (result.loadType === 'empty') throw new Error('Lavalink không tìm thấy kết quả.');
+      if (result.loadType === 'error') {
+        throw new Error(`Lavalink resolve lỗi: ${result.data?.message || 'nguồn không khả dụng'}`);
+      }
+      if (result.loadType === 'search' || result.loadType === 'track') {
+        const track = result.loadType === 'track' ? result.data : result.data?.tracks?.[0];
+        if (!track) throw new Error('Không tìm thấy bài hát.');
+        return [track];
+      }
+      if (result.loadType === 'playlist') return result.data.tracks || [];
+      throw new Error(`Lavalink trả về trạng thái không hỗ trợ: ${result.loadType}.`);
+    } catch (error) {
+      lastError = error;
+      if (attempt < LAVALINK_RETRIES) await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+    }
   }
-  if (result.loadType === 'search' || result.loadType === 'track') {
-    const track = result.loadType === 'track' ? result.data : result.data?.tracks?.[0];
-    if (!track) throw new Error('Không tìm thấy bài hát.');
-    return [track];
-  }
-  if (result.loadType === 'playlist') return result.data.tracks || [];
-  throw new Error(`Lavalink trả về trạng thái không hỗ trợ: ${result.loadType}.`);
+  throw lastError || new Error('Không thể truy vấn Lavalink.');
 }
 
 async function resolveRequest(input) {
@@ -244,9 +254,16 @@ async function ensurePlayer(guild, channelId) {
   player.on('end', async () => {
     if (stateFor(guild.id).mode !== 'radio') await playNext(guild.id);
   });
-  player.on('exception', (error) => console.error(`[Player:${guild.id}]`, error));
-  player.on('stuck', (threshold) => console.warn(`[Player:${guild.id}] Kẹt sau ${threshold}ms.`));
-  player.on('closed', (code, reason) => console.warn(`[Player:${guild.id}] Đóng (${code}): ${reason || 'không rõ lý do'}`));
+  player.on('exception', async (error) => {
+    console.error(`[Player:${guild.id}]`, error);
+    stateFor(guild.id).playing = false;
+    await playNext(guild.id);
+  });
+  player.on('stuck', async (threshold) => {
+    console.warn(`[Player:${guild.id}] Kẹt sau ${threshold}ms.`);
+    await player.stopTrack();
+  });
+  player.on('closed', (reason) => console.warn(`[Player:${guild.id}] Đóng:`, reason));
   return player;
 }
 
@@ -261,16 +278,17 @@ async function playNext(guildId) {
     await saveState();
     return;
   }
-  const next = state.queue.shift();
+  const next = state.queue[0];
   if (!next) {
     state.current = null;
     state.playing = false;
     await saveState();
     return;
   }
+  await player.playTrack({ track: { encoded: next.encoded }, volume: state.volume });
+  state.queue.shift();
   state.current = next;
   state.playing = true;
-  await player.playTrack({ track: { encoded: next.encoded }, volume: state.volume });
   await saveState();
 }
 
@@ -354,9 +372,9 @@ async function handlePlay(target, query) {
   const guild = target.guild;
   const channel = voiceChannel(target);
   const state = stateFor(guild.id);
-  await ensurePlayer(guild, channel.id);
   const radioKey = query.toLowerCase();
   if (RADIO_STATIONS[radioKey]) {
+    await ensurePlayer(guild, channel.id);
     await startRadio(guild, radioKey);
     return reply(target, `📻 Đang phát **${RADIO_STATIONS[radioKey].name}**.`);
   }
@@ -367,6 +385,7 @@ async function handlePlay(target, query) {
     throw new Error(`Hàng đợi tối đa ${MAX_QUEUE_SIZE} bài.`);
   }
   for (const track of result.tracks) track.requester = target.user?.tag || target.author?.tag || 'Unknown';
+  await ensurePlayer(guild, channel.id);
   state.mode = 'queue';
   state.station = null;
   state.queue.push(...result.tracks);

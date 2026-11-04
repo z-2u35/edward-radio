@@ -48,6 +48,15 @@ sudo docker run -d \
 Sau khi khởi động, kiểm tra `docker logs lavalink` phải có `Lavalink is ready to accept connections`.
 Bot không chứa cơ chế vượt chặn hoặc cookie YouTube; hãy dùng plugin YouTube được cập nhật theo tài liệu Lavalink.
 
+Kiểm tra source YouTube trực tiếp trên VM:
+
+```bash
+curl -H "Authorization: MAT_KHAU_LAVALINK" \
+  "http://127.0.0.1:2333/v4/loadtracks?identifier=ytsearch%3Atest"
+```
+
+Kết quả phải có `"loadType":"search"`. Nếu là `empty` hoặc `error`, sửa Lavalink trước khi kiểm tra bot Discord.
+
 ## Lệnh
 
 | Lệnh | Tác dụng |
