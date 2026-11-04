@@ -363,8 +363,9 @@ async function playNext(guildId) {
     state.current = next;
     await playEncoded(player, next.encoded, state.volume);
     state.queue.shift();
-    state.playing = false;
+    state.playing = true;
     await saveState();
+    console.log(`[Player:${guildId}] Current track: ${next.title}; remaining=${state.queue.length}`);
   } finally {
     state.transitioning = false;
   }
@@ -502,7 +503,8 @@ async function handlePlay(target, query, mode = 'queue') {
     state.playing = false;
     await player.stopTrack();
   }
-  if (!state.playing) await playNext(guild.id);
+  const lavalinkHasTrack = Boolean(player.track);
+  if (!lavalinkHasTrack || !state.playing) await playNext(guild.id);
   await saveState();
   const addedNames = result.tracks.slice(0, 10).map((track) => `• ${track.title}`).join('\n');
   const skippedText = result.skipped?.length
