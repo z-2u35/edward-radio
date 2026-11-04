@@ -314,7 +314,6 @@ client.on('messageCreate', async message => {
             const searchRes = await youtubedl(`ytsearch1:${query}`, { dumpJson: true, noCheckCertificates: true });
             const track = { title: searchRes.title, url: searchRes.webpage_url, requester: message.author.tag };
 
-            // Sửa điều kiện: Chỉ phát ngay khi bot đang ở chế độ radio, hoặc thực sự không có bài nào đang phát và hàng đợi trống
             if ((botState.mode === 'radio' || botState.mode === 'idle') && !currentTrack && queue.length === 0) {
                 playTrack(track);
                 return message.reply(`🎶 Đang phát: **${track.title}**`);
@@ -325,7 +324,8 @@ client.on('messageCreate', async message => {
         } catch (e) {
             return message.reply('❌ Không tìm thấy bài hát yêu cầu!');
         }
-    }       
+    }
+
     // 2. eds hoặc edskip
     if (command === 's' || command === 'skip') {
         if (botState.mode !== 'queue') return message.reply('❌ Không có bài hát nào trong hàng đợi để bỏ qua!');
@@ -540,10 +540,8 @@ client.on('interactionCreate', async interaction => {
 
 client.login(process.env.TOKEN);
 
-// Tạo một Web Server HTTP đơn giản để giữ bot luôn online trên Cloud (tránh bị sleep)
-const http = require('http');
+// Tạo Web Server HTTP đơn giản ở cuối file (dùng chung biến http ở đầu file) để chống ngủ đông trên Render
 const PORT = process.env.PORT || 3000;
-
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Edward ϟ Radio is running online 24/7!\n');
