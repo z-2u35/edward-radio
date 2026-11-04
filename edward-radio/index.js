@@ -228,6 +228,7 @@ async function ensurePlayer(guild, channelId) {
   if (existing) return existing;
   const player = await shoukaku.joinVoiceChannel({
     guildId: guild.id,
+    shardId: guild.shardId ?? 0,
     channelId,
     deaf: true,
     mute: false
@@ -428,7 +429,7 @@ shoukaku.on('disconnect', (name, count) => console.warn(`[Lavalink:${name}] Ng�
 shoukaku.on('ready', (name) => console.log(`[Lavalink:${name}] Sẵn sàng.`));
 shoukaku.on('debug', (message) => console.debug(`[Lavalink] ${message}`));
 
-client.on('ready', async () => {
+client.on('clientReady', async () => {
   client.user.setActivity('Edward ϟ Radio', { type: ActivityType.Listening });
   console.log(`Đăng nhập Discord: ${client.user.tag}`);
   try {
