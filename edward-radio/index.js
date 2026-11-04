@@ -1,4 +1,5 @@
 require('dotenv').config();
+
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -6,7 +7,14 @@ const https = require('https');
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 process.env.FFMPEG_PATH = ffmpegPath;
+// Chống bot bị crash do lỗi mạng ngầm không bắt kịp
+process.on('unhandledRejection', error => {
+    console.error('Lỗi ngoại lệ chưa được bắt (Unhandled Rejection):', error);
+});
 
+process.on('uncaughtException', error => {
+    console.error('Lỗi nghiêm trọng (Uncaught Exception):', error);
+});
 const {
     Client,
     GatewayIntentBits,
