@@ -69,6 +69,7 @@ function stateFor(guildId) {
       playing: false
     });
   }
+
   return guildStates.get(guildId);
 }
 
@@ -130,7 +131,10 @@ async function spotifyRequest(endpoint) {
   const response = await fetch(`https://api.spotify.com/v1/${endpoint}`, {
     headers: { Authorization: `Bearer ${await getSpotifyToken()}` }
   });
-  if (!response.ok) throw new Error(`Spotify API thất bại (${response.status}).`);
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Spotify API thất bại (${response.status}): ${body.slice(0, 160)}`);
+  }
   return response.json();
 }
 
@@ -200,10 +204,11 @@ async function resolveLavalink(query) {
 async function resolveRequest(input) {
   if (isSpotifyUrl(input)) {
     const reference = spotifyReference(input);
+    if (!reference) throw new Error('Link Spotify không hợp lệ.');
     const spotifyItems = await spotifyTracks(reference);
     const resolved = [];
     for (const item of spotifyItems) {
-      const tracks = await resolveLavalink(`ytsearch:${item.query}`);
+      const tracks = await resolveSearchTrack(item.query);
       if (tracks[0]) {
         resolved.push({
           encoded: tracks[0].encoded,
@@ -218,7 +223,9 @@ async function resolveRequest(input) {
     return { tracks: resolved, playlistName: reference.type === 'track' ? null : 'Spotify collection' };
   }
 
-  const tracks = await resolveLavalink(isUrl(input) ? input : `ytsearch:${input}`);
+  const tracks = isUrl(input)
+    ? await resolveLavalink(input)
+    : await resolveSearchTrack(input);
   return {
     tracks: tracks.map((track) => ({
       encoded: track.encoded,
@@ -230,6 +237,20 @@ async function resolveRequest(input) {
     })),
     playlistName: tracks.length > 1 ? 'Playlist' : null
   };
+}
+
+async function resolveSearchTrack(query) {
+  const searchPrefixes = ['ytsearch:', 'ytmsearch:'];
+  let lastError = null;
+  for (const prefix of searchPrefixes) {
+    try {
+      const tracks = await resolveLavalink(`${prefix}${query}`);
+      if (tracks.length) return tracks;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error(`Không tìm thấy bài hát cho: ${query}`);
 }
 
 async function ensurePlayer(guild, channelId) {
