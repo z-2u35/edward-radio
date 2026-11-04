@@ -48,6 +48,10 @@ sudo docker run -d \
 Sau khi khởi động, kiểm tra `docker logs lavalink` phải có `Lavalink is ready to accept connections`.
 Bot không chứa cơ chế vượt chặn hoặc cookie YouTube; hãy dùng plugin YouTube được cập nhật theo tài liệu Lavalink.
 
+Nếu log YouTube báo `This video requires login` hoặc `No supported audio streams available`,
+đó là YouTube đang chặn client/đòi đăng nhập, không phải lỗi queue Discord. Không dùng OAuth
+với tài khoản chính; có thể đổi track, chờ plugin cập nhật hoặc dùng nguồn Lavalink khác.
+
 Kiểm tra source YouTube trực tiếp trên VM:
 
 ```bash
