@@ -317,10 +317,12 @@ async function ensurePlayer(guild, channelId) {
 
 async function playEncoded(player, encoded, volume) {
   if (!encoded) throw new Error('Track Lavalink không có mã encoded.');
+  console.log(`[Player:${player.guildId}] Gửi track tới Lavalink, volume=${volume}`);
   await player.playTrack({
     track: { encoded }
   });
   await player.setGlobalVolume(Math.max(1, Math.min(100, Number(volume) || DEFAULT_VOLUME)));
+  console.log(`[Player:${player.guildId}] Lavalink đã nhận track.`);
 }
 
 async function playNext(guildId) {
@@ -384,12 +386,22 @@ async function loadState() {
   try {
     const data = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
     if (data.guildId) {
-      guildStates.set(data.guildId, { ...stateFor(data.guildId), ...data });
+      const state = { ...stateFor(data.guildId), ...data, playing: false, transitioning: false };
+      if (state.mode === 'queue' && state.current?.encoded) {
+        state.queue.unshift(state.current);
+        state.current = null;
+      }
+      guildStates.set(data.guildId, state);
       return;
     }
     for (const [guildId, state] of Object.entries(data)) {
       if (state && typeof state === 'object' && state.guildId) {
-        guildStates.set(guildId, { ...stateFor(guildId), ...state });
+        const restored = { ...stateFor(guildId), ...state, playing: false, transitioning: false };
+        if (restored.mode === 'queue' && restored.current?.encoded) {
+          restored.queue.unshift(restored.current);
+          restored.current = null;
+        }
+        guildStates.set(guildId, restored);
       }
     }
   } catch (error) {
