@@ -561,7 +561,21 @@ async function handleLeave(target) {
   return reply(target, '👋 Bot đã rời phòng thoại.');
 }
 
-function queueDashboard(state, requestedPage = 0) {
+async function handleStop(target) {
+  const state = stateFor(target.guild.id);
+  const player = shoukaku.players.get(target.guild.id);
+  if (player) await player.stopTrack();
+  state.queue = [];
+  state.current = null;
+  state.playing = false;
+  state.mode = 'queue';
+  state.station = null;
+  state.stay247 = false;
+  await saveState();
+  return reply(target, '⏹️ Đã dừng phát nhạc và xóa hàng đợi. Bot vẫn ở trong phòng thoại.');
+}
+
+function queueDashboard(state, requestedPage = 0, notice = '') {
   const pageSize = 10;
   const pageCount = Math.max(1, Math.ceil(state.queue.length / pageSize));
   const page = Math.max(0, Math.min(requestedPage, pageCount - 1));
@@ -571,7 +585,7 @@ function queueDashboard(state, requestedPage = 0) {
   const tracks = state.queue.slice(page * pageSize, (page + 1) * pageSize).map((track, index) =>
     `**${page * pageSize + index + 1}.** ${track.title} \`${duration(track.duration)}\``
   );
-  const description = `${current}\n\n${tracks.length ? `**Up next • Trang ${page + 1}/${pageCount}**\n${tracks.join('\n')}` : '_Queue đang trống._'}`;
+  const description = `${notice ? `${notice}\n\n` : ''}${current}\n\n${tracks.length ? `**Up next • Trang ${page + 1}/${pageCount}**\n${tracks.join('\n')}` : '_Queue đang trống._'}`;
 
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('queue_toggle').setLabel('⏯').setStyle(ButtonStyle.Secondary),
@@ -593,8 +607,7 @@ function queueDashboard(state, requestedPage = 0) {
     new ButtonBuilder().setCustomId('queue_leave').setLabel('Rời phòng').setStyle(ButtonStyle.Danger)
   );
 
-  return {
-    embeds: [new EmbedBuilder()
+  const embed = new EmbedBuilder()
       .setColor('#d2a84e')
       .setTitle('🎵 Hàng đợi')
       .setDescription(description)
@@ -604,7 +617,11 @@ function queueDashboard(state, requestedPage = 0) {
         { name: '🎚️ Chế độ', value: `\`${state.mode}\``, inline: true }
       )
       .setFooter({ text: `Edward Radio • Bảng điều khiển phát nhạc • ${state.queue.length} bài` })
-      .setTimestamp()],
+      .setTimestamp();
+  if (state.current?.artworkUrl) embed.setThumbnail(state.current.artworkUrl);
+
+  return {
+    embeds: [embed],
     components: [controls, seek, status]
   };
 }
@@ -766,7 +783,11 @@ async function handlePlay(target, query, mode = 'queue') {
   const skippedText = result.skipped?.length
     ? `\n⚠️ Bỏ qua ${result.skipped.length} bài không resolve được.`
     : '';
-  return reply(target, `✅ Đã thêm **${result.tracks.length}** bài vào hàng đợi:\n${addedNames}${skippedText}\nTổng: **${duration(totalDuration(state))}**.`);
+  return reply(target, queueDashboard(
+    state,
+    0,
+    `✅ Đã thêm **${result.tracks.length}** bài vào hàng đợi:\n${addedNames}${skippedText}`
+  ));
 }
 
 async function handleCommand(target, command, args) {
@@ -824,7 +845,7 @@ async function handleCommand(target, command, args) {
     await saveState();
     return reply(target, `♾️ Chế độ treo phòng: **${state.stay247 ? 'BẬT' : 'TẮT'}**.`);
   }
-  if (command === 'stop') return handleLeave(target);
+  if (command === 'stop') return handleStop(target);
   throw new Error('Lệnh không hợp lệ.');
 }
 
