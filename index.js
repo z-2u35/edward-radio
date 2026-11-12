@@ -10,7 +10,11 @@ const {
   GatewayIntentBits,
   REST,
   Routes,
-  SlashCommandBuilder
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } = require('discord.js');
 const { Connectors, Shoukaku } = require('shoukaku');
 
@@ -557,6 +561,119 @@ async function handleLeave(target) {
   return reply(target, '👋 Bot đã rời phòng thoại.');
 }
 
+function queueDashboard(state) {
+  const current = state.current
+    ? `▶️ **Đang phát**\n**${state.current.title}**\n\`${duration(state.current.duration)}\``
+    : '⏹️ Chưa có bài đang phát';
+  const tracks = state.queue.slice(0, 15).map((track, index) =>
+    `**${index + 1}.** ${track.title} \`${duration(track.duration)}\``
+  );
+  const overflow = state.queue.length > 15
+    ? `\n… và **${state.queue.length - 15}** bài khác trong queue.`
+    : '';
+  const description = `${current}\n\n${tracks.length ? `**Up next**\n${tracks.join('\n')}${overflow}` : '_Queue đang trống._'}`;
+
+  const controls = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('queue_toggle').setLabel('⏯').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('queue_previous').setLabel('⏮').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('queue_next').setLabel('⏭').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('queue_refresh').setLabel('🔄').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('queue_clear').setLabel('🗑').setStyle(ButtonStyle.Danger)
+  );
+  const seek = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('queue_volume_down').setLabel('🔉').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('queue_seek_back').setLabel('↩ 10s').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('queue_shuffle').setLabel('🔀').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('queue_seek_forward').setLabel('10s ↪').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('queue_volume_up').setLabel('🔊').setStyle(ButtonStyle.Secondary)
+  );
+  const status = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('queue_leave').setLabel('Rời phòng').setStyle(ButtonStyle.Danger)
+  );
+
+  return {
+    embeds: [new EmbedBuilder()
+      .setColor('#d2a84e')
+      .setTitle('🎵 Hàng đợi')
+      .setDescription(description)
+      .addFields(
+        { name: '🔊 Volume', value: `\`${state.volume}%\``, inline: true },
+        { name: '📚 Tổng queue', value: `\`${state.queue.length} bài\``, inline: true },
+        { name: '🎚️ Chế độ', value: `\`${state.mode}\``, inline: true }
+      )
+      .setFooter({ text: 'Edward Radio • Bảng điều khiển phát nhạc' })
+      .setTimestamp()],
+    components: [controls, seek, status]
+  };
+}
+
+async function queueDashboardReply(target) {
+  return reply(target, queueDashboard(stateFor(target.guild.id)));
+}
+
+async function handleQueueButton(interaction) {
+  const state = stateFor(interaction.guild.id);
+  const memberChannelId = interaction.member?.voice?.channelId;
+  if (!state.channelId || memberChannelId !== state.channelId) {
+    return interaction.reply({ content: '❌ Bạn phải ở cùng phòng thoại với bot.', ephemeral: true });
+  }
+  const player = shoukaku.players.get(interaction.guild.id);
+  if (!player && interaction.customId !== 'queue_refresh') {
+    return interaction.reply({ content: '❌ Player chưa sẵn sàng.', ephemeral: true });
+  }
+
+  switch (interaction.customId) {
+    case 'queue_toggle':
+      await player.setPaused(!player.paused);
+      break;
+    case 'queue_previous':
+      if (state.current?.encoded) await playEncoded(player, state.current.encoded, state.volume);
+      break;
+    case 'queue_next':
+      await player.stopTrack();
+      break;
+    case 'queue_volume_down':
+      state.volume = Math.max(1, state.volume - 10);
+      await player.setGlobalVolume(state.volume);
+      await saveState();
+      break;
+    case 'queue_volume_up':
+      state.volume = Math.min(100, state.volume + 10);
+      await player.setGlobalVolume(state.volume);
+      await saveState();
+      break;
+    case 'queue_seek_back':
+      await player.seekTo(Math.max(0, player.position - 10_000));
+      break;
+    case 'queue_seek_forward':
+      await player.seekTo(player.position + 10_000);
+      break;
+    case 'queue_shuffle':
+      for (let index = state.queue.length - 1; index > 0; index -= 1) {
+        const random = Math.floor(Math.random() * (index + 1));
+        [state.queue[index], state.queue[random]] = [state.queue[random], state.queue[index]];
+      }
+      await saveState();
+      break;
+    case 'queue_clear':
+      state.queue = [];
+      await saveState();
+      break;
+    case 'queue_leave':
+      if (state.invitedByUserId !== interaction.user.id) {
+        return interaction.reply({ content: '❌ Chỉ người đã mời bot mới có thể rời phòng.', ephemeral: true });
+      }
+      await handleLeave(interaction);
+      return;
+    case 'queue_refresh':
+      break;
+    default:
+      return;
+  }
+
+  return interaction.update(queueDashboard(state));
+}
+
 function commandBuilders() {
   return [
     new SlashCommandBuilder().setName('play').setDescription('Phát bài hát, playlist, Spotify hoặc radio')
@@ -664,12 +781,7 @@ async function handleCommand(target, command, args) {
     return reply(target, '⏭️ Đã bỏ qua bài hiện tại.');
   }
   if (command === 'queue') {
-    const lines = state.queue.slice(0, 15).map((track, index) => `${index + 1}. ${track.title} (${duration(track.duration)})`);
-    const currentLine = state.current
-      ? `▶️ Đang phát: **${state.current.title}** (${duration(state.current.duration)})`
-      : '';
-    if (!lines.length && !currentLine) return reply(target, 'Hàng đợi đang trống.');
-    return reply(target, `🎶 **Hàng đợi**${currentLine ? `\n${currentLine}` : ''}${lines.length ? `\n${lines.join('\n')}` : ''}`);
+    return queueDashboardReply(target);
   }
   if (command === 'deleteall') {
     const removed = state.queue.length;
@@ -726,7 +838,20 @@ client.on('clientReady', async () => {
 });
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand() || !interaction.guild) return;
+  if (!interaction.guild) return;
+  if (interaction.isButton()) {
+    if (!interaction.customId.startsWith('queue_')) return;
+    try {
+      await handleQueueButton(interaction);
+    } catch (error) {
+      console.error('[Queue Button]', error);
+      const content = `❌ ${error.message || 'Không thể thực hiện điều khiển.'}`;
+      if (interaction.replied || interaction.deferred) await interaction.editReply(content);
+      else await interaction.reply({ content, ephemeral: true });
+    }
+    return;
+  }
+  if (!interaction.isChatInputCommand()) return;
   try {
     await interaction.deferReply();
     const args = interaction.commandName === 'play'
