@@ -68,6 +68,7 @@ function stateFor(guildId) {
       station: null,
       playing: false,
       transitioning: false,
+      consecutiveFailures: 0,
       textChannelId: null,
       invitedByUserId: null
     });
@@ -290,6 +291,7 @@ async function ensurePlayer(guild, channelId) {
     const currentState = stateFor(guild.id);
     const current = currentState.current;
     currentState.playing = true;
+    currentState.consecutiveFailures = 0;
     console.log(`[Player:${guild.id}] Bắt đầu phát: ${current?.title || 'track không có metadata'}`);
     if (currentState.textChannelId && current) {
       const channel = await client.channels.fetch(currentState.textChannelId).catch(() => null);
@@ -311,7 +313,15 @@ async function ensurePlayer(guild, channelId) {
   });
   player.on('exception', async (error) => {
     console.error(`[Player:${guild.id}] Track exception:`, error);
-    stateFor(guild.id).playing = false;
+    const state = stateFor(guild.id);
+    state.playing = false;
+    state.consecutiveFailures += 1;
+    if (state.mode === 'radio' && state.consecutiveFailures >= 3) {
+      state.current = null;
+      await saveState();
+      console.error(`[Player:${guild.id}] Dừng radio sau ${state.consecutiveFailures} lỗi liên tiếp.`);
+      return;
+    }
     setTimeout(() => playNext(guild.id).catch((nextError) => {
       console.error(`[Player:${guild.id}] Không thể phục hồi player:`, nextError);
     }), 100);

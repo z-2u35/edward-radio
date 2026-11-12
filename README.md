@@ -56,11 +56,24 @@ newgrp docker
 ```
 
 Sau khi khởi động, kiểm tra `docker logs lavalink` phải có `Lavalink is ready to accept connections`.
-Bot không chứa cơ chế vượt chặn hoặc cookie YouTube; hãy dùng plugin YouTube được cập nhật theo tài liệu Lavalink.
+Mẫu config đã bật OAuth cho YouTube. Lần đầu chạy, xem:
+
+```bash
+docker logs -f lavalink
+```
+
+Mở URL và nhập code mà Lavalink in ra bằng một **tài khoản YouTube phụ**. Không dùng tài khoản Google/YouTube chính. Sau khi xác thực thành công, log sẽ in `refreshToken`; đặt token đó vào `plugins.youtube.oauth.refreshToken` trong `/opt/lavalink/application.yml`, rồi restart container:
+
+```bash
+docker restart lavalink
+```
+
+Không commit refresh token vào GitHub. Nếu đã đặt refresh token, có thể bỏ `oauth.enabled` hoặc giữ nguyên đều được.
 
 Nếu log YouTube báo `This video requires login` hoặc `No supported audio streams available`,
-đó là YouTube đang chặn client/đòi đăng nhập, không phải lỗi queue Discord. Không dùng OAuth
-với tài khoản chính; có thể đổi track, chờ plugin cập nhật hoặc dùng nguồn Lavalink khác.
+hãy kiểm tra config OAuth trong container đang chạy thực sự, không chỉ file `.example`. Log
+phải có client `TV` và OAuth đã hoàn tất. Không dùng OAuth với tài khoản chính; một số video
+bị giới hạn bản quyền vẫn có thể không phát được.
 
 Kiểm tra source YouTube trực tiếp trên VM:
 
