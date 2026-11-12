@@ -561,17 +561,17 @@ async function handleLeave(target) {
   return reply(target, '👋 Bot đã rời phòng thoại.');
 }
 
-function queueDashboard(state) {
+function queueDashboard(state, requestedPage = 0) {
+  const pageSize = 10;
+  const pageCount = Math.max(1, Math.ceil(state.queue.length / pageSize));
+  const page = Math.max(0, Math.min(requestedPage, pageCount - 1));
   const current = state.current
     ? `▶️ **Đang phát**\n**${state.current.title}**\n\`${duration(state.current.duration)}\``
     : '⏹️ Chưa có bài đang phát';
-  const tracks = state.queue.slice(0, 15).map((track, index) =>
-    `**${index + 1}.** ${track.title} \`${duration(track.duration)}\``
+  const tracks = state.queue.slice(page * pageSize, (page + 1) * pageSize).map((track, index) =>
+    `**${page * pageSize + index + 1}.** ${track.title} \`${duration(track.duration)}\``
   );
-  const overflow = state.queue.length > 15
-    ? `\n… và **${state.queue.length - 15}** bài khác trong queue.`
-    : '';
-  const description = `${current}\n\n${tracks.length ? `**Up next**\n${tracks.join('\n')}${overflow}` : '_Queue đang trống._'}`;
+  const description = `${current}\n\n${tracks.length ? `**Up next • Trang ${page + 1}/${pageCount}**\n${tracks.join('\n')}` : '_Queue đang trống._'}`;
 
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('queue_toggle').setLabel('⏯').setStyle(ButtonStyle.Secondary),
@@ -588,6 +588,8 @@ function queueDashboard(state) {
     new ButtonBuilder().setCustomId('queue_volume_up').setLabel('🔊').setStyle(ButtonStyle.Secondary)
   );
   const status = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`queue_page_prev:${page}`).setLabel('‹ Trang trước').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+    new ButtonBuilder().setCustomId(`queue_page_next:${page}`).setLabel('Trang sau ›').setStyle(ButtonStyle.Secondary).setDisabled(page >= pageCount - 1),
     new ButtonBuilder().setCustomId('queue_leave').setLabel('Rời phòng').setStyle(ButtonStyle.Danger)
   );
 
@@ -601,7 +603,7 @@ function queueDashboard(state) {
         { name: '📚 Tổng queue', value: `\`${state.queue.length} bài\``, inline: true },
         { name: '🎚️ Chế độ', value: `\`${state.mode}\``, inline: true }
       )
-      .setFooter({ text: 'Edward Radio • Bảng điều khiển phát nhạc' })
+      .setFooter({ text: `Edward Radio • Bảng điều khiển phát nhạc • ${state.queue.length} bài` })
       .setTimestamp()],
     components: [controls, seek, status]
   };
@@ -618,8 +620,16 @@ async function handleQueueButton(interaction) {
     return interaction.reply({ content: '❌ Bạn phải ở cùng phòng thoại với bot.', ephemeral: true });
   }
   const player = shoukaku.players.get(interaction.guild.id);
-  if (!player && interaction.customId !== 'queue_refresh') {
+  const dashboardOnly = interaction.customId === 'queue_refresh' || interaction.customId.startsWith('queue_page_');
+  if (!player && !dashboardOnly) {
     return interaction.reply({ content: '❌ Player chưa sẵn sàng.', ephemeral: true });
+  }
+
+  if (interaction.customId.startsWith('queue_page_')) {
+    const [action, currentPageValue] = interaction.customId.split(':');
+    const currentPage = Number.parseInt(currentPageValue, 10) || 0;
+    const nextPage = action === 'queue_page_next' ? currentPage + 1 : currentPage - 1;
+    return interaction.update(queueDashboard(state, nextPage));
   }
 
   switch (interaction.customId) {
