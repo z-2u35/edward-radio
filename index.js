@@ -19,6 +19,7 @@ const STATE_FILE = path.resolve(process.env.STATE_FILE || 'state.json');
 const MAX_QUEUE_SIZE = Number.parseInt(process.env.MAX_QUEUE_SIZE || '500', 10);
 const DEFAULT_VOLUME = 70;
 const LAVALINK_RETRIES = 3;
+const LAVALINK_WAIT_TIMEOUT = Number.parseInt(process.env.LAVALINK_WAIT_TIMEOUT || '120000', 10);
 
 const RADIO_STATIONS = {
   lofi: { name: 'Lofi Hip Hop', url: process.env.RADIO_LOFI_URL },
@@ -47,18 +48,19 @@ const shoukaku = new Shoukaku(new Connectors.DiscordJS(client), nodes, {
   resume: true,
   resumeTimeout: 30,
   resumeByLibrary: true,
-  reconnectTries: 10,
+  reconnectTries: 1000,
+  reconnectInterval: 5,
   restTimeout: 10_000
 });
 
-async function waitForLavalink(timeoutMs = 30_000) {
+async function waitForLavalink(timeoutMs = LAVALINK_WAIT_TIMEOUT) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const node = shoukaku.getIdealNode();
     if (node) return node;
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  throw new Error('Lavalink chưa sẵn sàng sau 30 giây. Hãy kiểm tra docker logs lavalink.');
+  throw new Error(`Lavalink chưa sẵn sàng sau ${Math.round(timeoutMs / 1000)} giây. Hãy kiểm tra docker logs lavalink.`);
 }
 
 const guildStates = new Map();
@@ -469,7 +471,7 @@ function voiceChannel(interaction) {
   return channel;
 }
 
-async function handleJoin(target, requestedChannel = null) {
+async function handleJoin(target, requestedChannel = null, pendingReply = null) {
   const guild = target.guild;
   const channel = requestedVoiceChannel(guild, target.member, requestedChannel);
   if (!channel) throw new Error('Chọn room hoặc vào một phòng thoại trước.');
@@ -484,7 +486,8 @@ async function handleJoin(target, requestedChannel = null) {
   if (!state.playing) {
     await startRadio(guild, 'lofi', channel.id);
   }
-  return reply(target, `✅ Đã vào <#${channel.id}>. Chỉ người mời bot mới có thể dùng /leave hoặc edl.`);
+  const content = `✅ Đã vào <#${channel.id}>. Chỉ người mời bot mới có thể dùng /leave hoặc edl.`;
+  return pendingReply ? pendingReply.edit(content) : reply(target, content);
 }
 
 async function handleLeave(target) {
@@ -742,15 +745,19 @@ client.on('messageCreate', async (message) => {
     edstop: 'stop'
   };
   const normalized = aliases[`${PREFIX}${command}`] || aliases[command] || command;
+  let pendingReply = null;
   try {
     if (normalized === 'join') {
-      await handleJoin(message, messageVoiceChannel(message, parts));
+      pendingReply = await message.reply('⏳ Đang kết nối Lavalink và vào phòng thoại...');
+      await handleJoin(message, messageVoiceChannel(message, parts), pendingReply);
     } else {
       await handleCommand(message, normalized, parts);
     }
   } catch (error) {
     console.error('[Prefix]', error);
-    await message.reply(`❌ ${error.message || 'Đã xảy ra lỗi.'}`);
+    const content = `❌ ${error.message || 'Đã xảy ra lỗi.'}`;
+    if (pendingReply) await pendingReply.edit(content).catch(() => message.reply(content));
+    else await message.reply(content);
   }
 });
 
