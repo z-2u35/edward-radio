@@ -51,6 +51,16 @@ const shoukaku = new Shoukaku(new Connectors.DiscordJS(client), nodes, {
   restTimeout: 10_000
 });
 
+async function waitForLavalink(timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const node = shoukaku.getIdealNode();
+    if (node) return node;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error('Lavalink chưa sẵn sàng sau 30 giây. Hãy kiểm tra docker logs lavalink.');
+}
+
 const guildStates = new Map();
 let spotifyToken = null;
 let spotifyTokenExpiresAt = 0;
@@ -182,8 +192,7 @@ async function resolveLavalink(query) {
   let lastError = null;
   for (let attempt = 1; attempt <= LAVALINK_RETRIES; attempt += 1) {
     try {
-      const node = shoukaku.getIdealNode();
-      if (!node) throw new Error('Chưa kết nối được Lavalink.');
+      const node = await waitForLavalink();
       const result = await node.rest.resolve(query);
       if (!result) throw new Error('Lavalink không trả về kết quả.');
       if (result.loadType === 'empty') throw new Error('Lavalink không tìm thấy kết quả.');
@@ -271,6 +280,7 @@ async function resolveSearchTrack(query) {
 }
 
 async function ensurePlayer(guild, channelId) {
+  await waitForLavalink();
   const state = stateFor(guild.id);
   const actualChannelId = guild.members.me?.voice?.channelId || null;
   if (actualChannelId && actualChannelId !== channelId) {
