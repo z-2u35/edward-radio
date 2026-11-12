@@ -39,7 +39,9 @@ const client = new Client({
 
 const nodes = [{
   name: process.env.LAVALINK_NAME || 'main',
-  url: `${process.env.LAVALINK_HOST || '127.0.0.1'}:${process.env.LAVALINK_PORT || '2333'}`,
+  url: /:\d+$/.test(process.env.LAVALINK_HOST || '')
+    ? process.env.LAVALINK_HOST
+    : `${process.env.LAVALINK_HOST || '127.0.0.1'}:${process.env.LAVALINK_PORT || '2333'}`,
   auth: process.env.LAVALINK_PASSWORD || 'youshallnotpass',
   secure: process.env.LAVALINK_SECURE === 'true'
 }];
