@@ -5,7 +5,7 @@ server:
 lavalink:
   pluginsDir: "./plugins"
   server:
-    password: "CHANGE_ME"
+    password: "${LAVALINK_PASSWORD:youshallnotpass}"
     sources:
       youtube: false
       soundcloud: true
@@ -22,7 +22,7 @@ plugins:
       enabled: true
       # Lần chạy đầu, Lavalink sẽ in URL/code OAuth trong docker logs.
       # Sau khi xác thực, đặt refreshToken vào đây để không phải xác thực lại.
-      # refreshToken: "PASTE_REFRESH_TOKEN_HERE"
+      refreshToken: "${YOUTUBE_REFRESH_TOKEN:}"
     allowSearch: true
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true

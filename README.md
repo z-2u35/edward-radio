@@ -137,7 +137,7 @@ Khi thêm playlist Spotify, bot lấy toàn bộ các trang track từ Spotify W
 
 Railway cần hai service trong cùng một project:
 
-1. **Lavalink**: tạo service từ image `ghcr.io/lavalink-devs/lavalink:4`, mount file `lavalink/application.yml` từ một volume/secret phù hợp, và đặt `server.password`.
+1. **Lavalink**: tạo service từ repository này, đặt Root Directory là `lavalink`; Railway sẽ build `lavalink/Dockerfile` và dùng biến `LAVALINK_PASSWORD`/`YOUTUBE_REFRESH_TOKEN`.
 2. **Edward Radio**: deploy repository này. Railway sẽ dùng `Dockerfile` và `railway.toml` có sẵn.
 
 Trong service bot đặt các biến:
@@ -150,6 +150,7 @@ LAVALINK_HOST=<private-domain-cua-service-lavalink>
 LAVALINK_PORT=2333
 LAVALINK_PASSWORD=<cung-gia-tri-voi-lavalink>
 LAVALINK_SECURE=false
+YOUTUBE_REFRESH_TOKEN=...
 SPOTIFY_CLIENT_ID=...
 SPOTIFY_CLIENT_SECRET=...
 ```
