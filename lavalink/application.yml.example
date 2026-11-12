@@ -1,0 +1,29 @@
+server:
+  address: 0.0.0.0
+  port: 2333
+
+lavalink:
+  pluginsDir: "./plugins"
+  server:
+    password: "CHANGE_ME"
+    sources:
+      youtube: false
+      soundcloud: true
+      http: true
+      local: false
+  plugins:
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
+      repository: "https://maven.lavalink.dev/releases"
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    clients:
+      - MUSIC
+      - WEB
+      - WEBEMBEDDED
+      - ANDROID_MUSIC
+      - TVHTML5_SIMPLY

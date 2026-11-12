@@ -1,694 +1,763 @@
+'use strict';
+
 require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
-const { spawn } = require('child_process');
+
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const {
-    Client,
-    GatewayIntentBits,
-    ChannelType,
-    ActivityType,
-    REST,
-    Routes,
-    SlashCommandBuilder,
-    EmbedBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle
+  ActivityType,
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder
 } = require('discord.js');
-const {
-    joinVoiceChannel,
-    createAudioPlayer,
-    createAudioResource,
-    StreamType,
-    AudioPlayerStatus,
-    VoiceConnectionStatus,
-    entersState,
-    NoSubscriberBehavior,
-    getVoiceConnection
-} = require('@discordjs/voice');
-const ffmpegPath = require('ffmpeg-static');
-const play = require('play-dl');
+const { Connectors, Shoukaku } = require('shoukaku');
 
-const requiredEnv = ['TOKEN', 'CLIENT_ID'];
-const missingEnv = requiredEnv.filter(name => !process.env[name]);
-if (missingEnv.length > 0) {
-    throw new Error(`Thiếu biến môi trường bắt buộc: ${missingEnv.join(', ')}`);
-}
+const PREFIX = process.env.PREFIX || 'ed';
+const STATE_FILE = path.resolve(process.env.STATE_FILE || 'state.json');
+const MAX_QUEUE_SIZE = Number.parseInt(process.env.MAX_QUEUE_SIZE || '500', 10);
+const DEFAULT_VOLUME = 70;
+const LAVALINK_RETRIES = 3;
 
-// Danh sách các đài Radio trực tuyến 24/7
-const STATIONS = {
-    lofi: { name: '☕ Lofi Hip Hop Beats', url: 'https://lfhh.radioca.st/stream', desc: 'Nhạc Lofi thư giãn, học bài & làm việc' },
-    chill: { name: '🌙 Chillsynth / Nightwave', url: 'https://radio.plaza.one/mp3', desc: 'Giai điệu Synthwave & Aesthetic ban đêm' },
-    jazz: { name: '🎷 Smooth Jazz 24/7', url: 'https://streaming.live365.com/a49833', desc: 'Nhạc Jazz nhẹ nhàng, sang trọng' },
-    piano: { name: '🎹 Peaceful Piano', url: 'https://pianosolo.stream.laut.fm/pianosolo', desc: 'Độc tấu Piano êm dịu, dễ ngủ' },
-    asian: { name: '🏮 Asian Lofi Radio', url: 'https://stream.zeno.fm/0r0xa792kwzuv', desc: 'Lofi mang âm hưởng Á Đông' },
-    rain: { name: '🌧️ Rainy Lofi Vibes', url: 'https://stream.zeno.fm/f3wvbbqmdg8uv', desc: 'Giai điệu Lofi kết hợp tiếng mưa rơi' }
+const RADIO_STATIONS = {
+  lofi: { name: 'Lofi Hip Hop', url: process.env.RADIO_LOFI_URL },
+  chillsynth: { name: 'Chillsynth', url: process.env.RADIO_CHILLSYNTH_URL },
+  jazz: { name: 'Smooth Jazz', url: process.env.RADIO_SMOOTH_JAZZ_URL },
+  piano: { name: 'Peaceful Piano', url: process.env.RADIO_PEACEFUL_PIANO_URL }
 };
-
-// File lưu trạng thái để bot tự nhớ phòng 24/7 khi khởi động lại
-const STATE_FILE = path.join(__dirname, 'state.json');
-
-let botState = {
-    guildId: null,
-    channelId: null,
-    station: 'lofi',
-    volume: 50,
-    stay247: true,
-    isPlaying: false,
-    invitedByUserId: null
-};
-
-function loadState() {
-    if (fs.existsSync(STATE_FILE)) {
-        try {
-            botState = { ...botState, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
-        } catch (e) {
-            console.error('[Edward ϟ Radio] Không thể đọc file state.json:', e);
-        }
-    }
-}
-
-function saveState() {
-    try {
-        fs.writeFileSync(STATE_FILE, JSON.stringify(botState, null, 2));
-    } catch (error) {
-        console.error('[Edward ϟ Radio] Không thể lưu state.json:', error);
-    }
-}
-
-loadState();
-
-let currentResource = null;
-let ffmpegProcess = null;
-let reconnectTimer = null;
-let currentSource = null;
-
-// Khởi tạo Audio Player không tự ngắt khi phòng trống
-const player = createAudioPlayer({
-    behaviors: {
-        noSubscriber: NoSubscriberBehavior.Play
-    }
-});
 
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildVoiceStates,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
-// Hàm phát luồng Radio
-function stopCurrentAudio() {
-    if (ffmpegProcess) {
-        ffmpegProcess.kill();
-        ffmpegProcess = null;
-    }
-    currentResource = null;
-}
-
-function createRadioResource(station) {
-    const process = spawn(ffmpegPath, [
-        '-hide_banner',
-        '-loglevel', 'error',
-        '-nostdin',
-        '-reconnect', '1',
-        '-reconnect_streamed', '1',
-        '-reconnect_delay_max', '5',
-        '-i', station.url,
-        '-vn',
-        '-f', 's16le',
-        '-ar', '48000',
-        '-ac', '2',
-        'pipe:1'
-    ]);
-
-    ffmpegProcess = process;
-    process.stderr.on('data', data => {
-        const message = data.toString().trim();
-        if (message) console.error(`[Edward ϟ Radio] FFmpeg: ${message}`);
-    });
-    process.on('error', error => {
-        console.error(`[Edward ϟ Radio] Không thể khởi động FFmpeg: ${error.message}`);
-    });
-    process.on('close', () => {
-        if (ffmpegProcess === process) ffmpegProcess = null;
-    });
-
-    return createAudioResource(process.stdout, {
-        inputType: StreamType.Raw,
-        inlineVolume: true
-    });
-}
-
-async function playSource(source) {
-    if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-    }
-    stopCurrentAudio();
-    currentSource = source;
-
-    let resource;
-    if (source.kind === 'radio') {
-        console.log(`[Edward ϟ Radio] Đang phát: ${source.title}`);
-        resource = createRadioResource(source.station);
-    } else {
-        console.log(`[Edward ϟ Radio] Đang tải: ${source.title}`);
-        const audio = await play.stream(source.url, { discordPlayerCompatibility: true });
-        resource = createAudioResource(audio.stream, {
-            inputType: audio.type,
-            inlineVolume: true
-        });
-    }
-
-    currentResource = resource;
-    currentResource.volume.setVolume(botState.volume / 100);
-
-    player.play(currentResource);
-    botState.isPlaying = true;
-    saveState();
-
-    if (client.user) {
-        client.user.setActivity(`${source.title} | /play`, { type: ActivityType.Listening });
-    }
-}
-
-function playRadio() {
-    const station = STATIONS[botState.station] || STATIONS.lofi;
-    return playSource({
-        kind: 'radio',
-        station,
-        title: station.name,
-        desc: station.desc
-    });
-}
-
-async function resolveTrack(query) {
-    if (play.yt_validate(query) === 'video') {
-        const info = await play.video_basic_info(query);
-        return { kind: 'track', url: query, title: info.video_details.title };
-    }
-
-    if (play.sp_validate(query) === 'track') {
-        const spotifyTrack = await play.spotify(query);
-        await spotifyTrack.load();
-        const searchTerm = `${spotifyTrack.name} ${spotifyTrack.artists.map(artist => artist.name).join(' ')}`;
-        const results = await play.search(searchTerm, { limit: 1, source: { youtube: 'video' } });
-        if (!results[0]) throw new Error('Không tìm thấy bản YouTube tương ứng với bài Spotify.');
-        return { kind: 'track', url: results[0].url, title: `${spotifyTrack.name} (Spotify)` };
-    }
-
-    const results = await play.search(query, { limit: 1, source: { youtube: 'video' } });
-    if (!results[0]) throw new Error('Không tìm thấy bài hát phù hợp.');
-    return { kind: 'track', url: results[0].url, title: results[0].title };
-}
-
-// Tự động kết nối lại luồng nhạc nếu bị ngắt
-player.on(AudioPlayerStatus.Idle, () => {
-    if (botState.isPlaying) {
-        console.log('[Edward ϟ Radio] Luồng nhạc bị gián đoạn, đang tải lại sau 3 giây...');
-        if (!reconnectTimer) {
-            reconnectTimer = setTimeout(() => {
-                reconnectTimer = null;
-                playSource(currentSource || { kind: 'radio', station: STATIONS.lofi, title: STATIONS.lofi.name })
-                    .catch(error => console.error('[Edward ϟ Radio] Reconnect nguồn thất bại:', error.message));
-            }, 3000);
-        }
-    }
+const nodes = [{
+  name: process.env.LAVALINK_NAME || 'main',
+  url: `${process.env.LAVALINK_HOST || '127.0.0.1'}:${process.env.LAVALINK_PORT || '2333'}`,
+  auth: process.env.LAVALINK_PASSWORD || 'youshallnotpass',
+  secure: process.env.LAVALINK_SECURE === 'true'
+}];
+const shoukaku = new Shoukaku(new Connectors.DiscordJS(client), nodes, {
+  moveOnDisconnect: false,
+  resume: true,
+  resumeTimeout: 30,
+  resumeByLibrary: true,
+  reconnectTries: 10,
+  restTimeout: 10_000
 });
 
-player.on('error', error => {
-    console.error(`[Edward ϟ Radio] Lỗi âm thanh: ${error.message}`);
-    if (botState.isPlaying) {
-        if (!reconnectTimer) {
-            reconnectTimer = setTimeout(() => {
-                reconnectTimer = null;
-                playSource(currentSource || { kind: 'radio', station: STATIONS.lofi, title: STATIONS.lofi.name })
-                    .catch(error => console.error('[Edward ϟ Radio] Reconnect nguồn thất bại:', error.message));
-            }, 5000);
-        }
-    }
-});
+const guildStates = new Map();
+let spotifyToken = null;
+let spotifyTokenExpiresAt = 0;
 
-// Hàm vào phòng thoại và giữ kết nối
-async function connectAndPlay(guildId, channelId, inviterUserId, startPlayback = true) {
-    const guild = client.guilds.cache.get(guildId);
-    if (!guild) return false;
-
-    const channel = guild.channels.cache.get(channelId);
-    if (!channel || !channel.isVoiceBased()) return false;
-
-    const connection = joinVoiceChannel({
-        channelId: channel.id,
-        guildId: guild.id,
-        adapterCreator: guild.voiceAdapterCreator,
-        selfDeaf: true,
-        selfMute: false
+function stateFor(guildId) {
+  if (!guildStates.has(guildId)) {
+    guildStates.set(guildId, {
+      guildId,
+      channelId: null,
+      queue: [],
+      current: null,
+      volume: DEFAULT_VOLUME,
+      stay247: false,
+      mode: 'queue',
+      station: null,
+      playing: false,
+      transitioning: false,
+      textChannelId: null,
+      invitedByUserId: null
     });
+  }
 
-    connection.subscribe(player);
-    botState.guildId = guildId;
-    botState.channelId = channelId;
-    if (inviterUserId) botState.invitedByUserId = inviterUserId;
-    saveState();
-    if (startPlayback) {
-        await playSource(currentSource || {
-            kind: 'radio',
-            station: STATIONS[botState.station] || STATIONS.lofi,
-            title: (STATIONS[botState.station] || STATIONS.lofi).name,
-            desc: (STATIONS[botState.station] || STATIONS.lofi).desc
-        });
-    }
+  return guildStates.get(guildId);
+}
 
-    connection.on(VoiceConnectionStatus.Disconnected, async () => {
-        try {
-            await Promise.race([
-                entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-                entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-            ]);
-        } catch (error) {
-            if (botState.stay247 && botState.isPlaying && botState.channelId) {
-                console.log('[Edward ϟ Radio] Mất kết nối! Đang tự động vào lại phòng 24/7...');
-                if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
-                    connection.destroy();
-                }
-                setTimeout(() => connectAndPlay(botState.guildId, botState.channelId, botState.invitedByUserId), 5000);
-            }
-        }
-    });
+function duration(ms) {
+  const totalSeconds = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? `${hours} giờ ${String(minutes).padStart(2, '0')} phút ${String(seconds).padStart(2, '0')} giây`
+    : `${minutes} phút ${String(seconds).padStart(2, '0')} giây`;
+}
 
+function totalDuration(state) {
+  return (state.queue.reduce((sum, track) => sum + (track.duration || 0), 0)
+    + (state.current?.duration || 0));
+}
+
+function isUrl(value) {
+  try {
+    new URL(value);
     return true;
+  } catch {
+    return false;
+  }
 }
 
-function getTargetVoiceChannel(guild, member, requestedChannel) {
-    if (requestedChannel) return requestedChannel.isVoiceBased() ? requestedChannel : null;
-    if (member.voice.channel) return member.voice.channel;
-    if (botState.guildId === guild.id && botState.channelId) {
-        return guild.channels.cache.get(botState.channelId) || null;
-    }
-    return null;
+function isSpotifyUrl(value) {
+  return /^https?:\/\/open\.spotify\.com\/(intl-[^/]+\/)?(track|album|playlist)\//i.test(value);
 }
 
-function canInviteUserLeave(userId, guildId) {
-    return botState.guildId === guildId && botState.invitedByUserId === userId;
+function spotifyReference(value) {
+  const match = value.match(/open\.spotify\.com\/(?:intl-[^/]+\/)?(track|album|playlist)\/([a-zA-Z0-9]+)/i);
+  return match ? { type: match[1].toLowerCase(), id: match[2] } : null;
 }
 
-async function leaveVoice(guildId) {
-    const connection = getVoiceConnection(guildId);
-    botState.isPlaying = false;
-    if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-    }
-    stopCurrentAudio();
-    player.stop();
-    if (connection) connection.destroy();
-    botState.guildId = null;
-    botState.channelId = null;
-    botState.invitedByUserId = null;
-    saveState();
-    client.user.setActivity('/join để vào phòng', { type: ActivityType.Listening });
+async function getSpotifyToken() {
+  const id = process.env.SPOTIFY_CLIENT_ID;
+  const secret = process.env.SPOTIFY_CLIENT_SECRET;
+  if (!id || !secret) throw new Error('Thiếu SPOTIFY_CLIENT_ID hoặc SPOTIFY_CLIENT_SECRET.');
+  if (spotifyToken && Date.now() < spotifyTokenExpiresAt) return spotifyToken;
+
+  const response = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: 'grant_type=client_credentials'
+  });
+  if (!response.ok) throw new Error(`Spotify token request thất bại (${response.status}).`);
+  const data = await response.json();
+  spotifyToken = data.access_token;
+  spotifyTokenExpiresAt = Date.now() + Math.max(30, data.expires_in - 60) * 1000;
+  return spotifyToken;
 }
 
-// Tạo các nút bấm điều khiển nhanh giống Lofi Radio
-function createControlButtons() {
-    return new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId('btn_pause_resume')
-            .setLabel(player.state.status === AudioPlayerStatus.Paused ? '▶️ Tiếp tục' : '⏸️ Tạm dừng')
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId('btn_random')
-            .setLabel('🔀 Đổi đài ngẫu nhiên')
-            .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-            .setCustomId('btn_247')
-            .setLabel(`24/7: ${botState.stay247 ? 'BẬT' : 'TẮT'}`)
-            .setStyle(botState.stay247 ? ButtonStyle.Success : ButtonStyle.Danger)
-    );
+async function spotifyRequest(endpoint) {
+  const response = await fetch(`https://api.spotify.com/v1/${endpoint}`, {
+    headers: { Authorization: `Bearer ${await getSpotifyToken()}` }
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Spotify API thất bại (${response.status}): ${body.slice(0, 160)}`);
+  }
+  return response.json();
 }
 
-// Tạo Embed hiển thị trạng thái phát nhạc
-function createNowPlayingEmbed() {
-    const source = currentSource || {
-        title: STATIONS[botState.station].name,
-        desc: STATIONS[botState.station].desc
-    };
-    return new EmbedBuilder()
-        .setColor('#8E44AD')
-        .setAuthor({ name: 'Edward ϟ Radio — Bảng Điều Khiển', iconURL: client.user.displayAvatarURL() })
-        .setTitle(`Đang phát: ${source.title}`)
-        .setDescription(source.desc ? `*${source.desc}*` : '*Nguồn phát trực tuyến*')
-        .addFields(
-            { name: '🔊 Phòng thoại', value: botState.channelId ? `<#${botState.channelId}>` : 'Chưa kết nối', inline: true },
-            { name: '🔉 Âm lượng', value: `\`${botState.volume}%\``, inline: true },
-            { name: '♾️ Chế độ 24/7', value: botState.stay247 ? '`🟢 Đang Bật`' : '`🔴 Đang Tắt`', inline: true }
-        )
-        .setFooter({ text: 'Sử dụng /play để đổi đài hoặc /stop để bot rời phòng' })
-        .setTimestamp();
+async function spotifyTracks(reference) {
+  if (reference.type === 'track') {
+    const track = await spotifyRequest(`tracks/${reference.id}`);
+    return [{
+      title: `${track.artists.map((artist) => artist.name).join(', ')} - ${track.name}`,
+      query: `${track.artists.map((artist) => artist.name).join(', ')} - ${track.name} official audio`,
+      duration: track.duration_ms,
+      artworkUrl: track.album?.images?.[0]?.url || null
+    }];
+  }
+
+  const first = await spotifyRequest(`${reference.type}s/${reference.id}`);
+  const tracks = [];
+  let items = first.tracks?.items || [];
+  let next = first.tracks?.next;
+  while (next) {
+    const response = await fetch(next, { headers: { Authorization: `Bearer ${await getSpotifyToken()}` } });
+    if (!response.ok) throw new Error(`Spotify pagination thất bại (${response.status}).`);
+    const page = await response.json();
+    items = items.concat(page.items || []);
+    next = page.next;
+  }
+
+  for (const item of items) {
+    const track = item.track || item;
+    if (!track?.name || !track.artists?.length) continue;
+    tracks.push({
+      title: `${track.artists.map((artist) => artist.name).join(', ')} - ${track.name}`,
+      query: `${track.artists.map((artist) => artist.name).join(', ')} - ${track.name} official audio`,
+      duration: track.duration_ms || 0,
+      artworkUrl: track.album?.images?.[0]?.url || first.images?.[0]?.url || null
+    });
+  }
+  return tracks;
 }
 
-// Đăng ký bộ lệnh Slash Commands
-async function registerCommands() {
-    const stationChoices = Object.entries(STATIONS).map(([key, val]) => ({
-        name: val.name,
-        value: key
-    }));
-
-    const commands = [
-        new SlashCommandBuilder()
-            .setName('play')
-            .setDescription('Phát radio, link YouTube, Spotify hoặc tìm bài hát')
-            .addStringOption(opt =>
-                opt.setName('station')
-                    .setDescription('Chọn đài radio')
-                    .setRequired(false)
-                    .addChoices(...stationChoices)
-            )
-            .addStringOption(opt =>
-                opt.setName('query')
-                    .setDescription('Tên bài hát hoặc link YouTube/Spotify')
-                    .setRequired(false)
-            ),
-        new SlashCommandBuilder()
-            .setName('join')
-            .setDescription('Đưa bot vào phòng thoại')
-            .addChannelOption(opt =>
-                opt.setName('room')
-                    .setDescription('Phòng thoại đích; bỏ trống để dùng phòng hiện tại')
-                    .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
-                    .setRequired(false)
-            ),
-        new SlashCommandBuilder()
-            .setName('leave')
-            .setDescription('Đưa bot rời phòng; chỉ người đã mời bot mới dùng được'),
-        new SlashCommandBuilder()
-            .setName('station')
-            .setDescription('Xem danh sách các đài Radio hiện có trên Edward ϟ Radio'),
-        new SlashCommandBuilder()
-            .setName('volume')
-            .setDescription('Điều chỉnh âm lượng của Edward ϟ Radio (1 - 100)')
-            .addIntegerOption(opt =>
-                opt.setName('level')
-                    .setDescription('Nhập mức âm lượng từ 1 đến 100')
-                    .setMinValue(1)
-                    .setMaxValue(100)
-                    .setRequired(true)
-            ),
-        new SlashCommandBuilder()
-            .setName('247')
-            .setDescription('Bật hoặc tắt chế độ tự treo 24/7 một mình trong phòng'),
-        new SlashCommandBuilder()
-            .setName('nowplaying')
-            .setDescription('Xem thông tin đài đang phát và bảng điều khiển'),
-        new SlashCommandBuilder()
-            .setName('stop')
-            .setDescription('Dừng nhạc, tắt 24/7 và cho Edward ϟ Radio rời phòng thoại'),
-        new SlashCommandBuilder()
-            .setName('help')
-            .setDescription('Xem danh sách toàn bộ lệnh của Edward ϟ Radio')
-    ].map(cmd => cmd.toJSON());
-
-    const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+async function resolveLavalink(query) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= LAVALINK_RETRIES; attempt += 1) {
     try {
-        if (process.env.GUILD_ID) {
-            await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID), { body: commands });
-        } else {
-            await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-        }
-        console.log('[Edward ϟ Radio] Đã đăng ký đầy đủ các lệnh Slash!');
+      const node = shoukaku.getIdealNode();
+      if (!node) throw new Error('Chưa kết nối được Lavalink.');
+      const result = await node.rest.resolve(query);
+      if (!result) throw new Error('Lavalink không trả về kết quả.');
+      if (result.loadType === 'empty') throw new Error('Lavalink không tìm thấy kết quả.');
+      if (result.loadType === 'error') {
+        throw new Error(`Lavalink resolve lỗi: ${result.data?.message || 'nguồn không khả dụng'}`);
+      }
+      if (result.loadType === 'search' || result.loadType === 'track') {
+        const track = result.loadType === 'track' ? result.data : result.data?.[0];
+        if (!track) throw new Error('Không tìm thấy bài hát.');
+        return [track];
+      }
+      if (result.loadType === 'playlist') return result.data.tracks || [];
+      throw new Error(`Lavalink trả về trạng thái không hỗ trợ: ${result.loadType}.`);
     } catch (error) {
-        console.error('Lỗi đăng ký lệnh:', error);
+      lastError = error;
+      if (attempt < LAVALINK_RETRIES) await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
     }
+  }
+  throw lastError || new Error('Không thể truy vấn Lavalink.');
 }
 
-client.once('ready', async () => {
-    console.log(`⚡ ${client.user.tag} đã sẵn sàng!`);
-    await registerCommands();
-
-    // Nếu trước khi tắt bot đang ở chế độ 24/7 tại phòng nào đó, tự động vào lại
-    if (botState.stay247 && botState.isPlaying && botState.guildId && botState.channelId) {
-        console.log('[Edward ϟ Radio] Khôi phục phiên treo 24/7 từ lần chạy trước...');
-        connectAndPlay(botState.guildId, botState.channelId, botState.invitedByUserId);
-    } else {
-        client.user.setActivity('/play để nghe nhạc 24/7', { type: ActivityType.Listening });
-    }
-});
-
-// Kiểm tra sự kiện phòng thoại (Tự vào lại nếu bị kick khi bật 24/7, hoặc tự rời nếu tắt 24/7 và phòng trống)
-client.on('voiceStateUpdate', (oldState, newState) => {
-    // 1. Trường hợp bot bị ngắt kết nối / bị kick thủ công
-    if (oldState.member.id === client.user.id && oldState.channelId && !newState.channelId) {
-        if (botState.stay247 && botState.isPlaying && botState.channelId) {
-            console.log('[Edward ϟ Radio] Bị ngắt khỏi phòng nhưng chế độ 24/7 đang BẬT -> Tự vào lại sau 3s...');
-            setTimeout(() => connectAndPlay(botState.guildId, botState.channelId, botState.invitedByUserId), 3000);
+async function resolveRequest(input) {
+  if (isSpotifyUrl(input)) {
+    const reference = spotifyReference(input);
+    if (!reference) throw new Error('Link Spotify không hợp lệ.');
+    const spotifyItems = await spotifyTracks(reference);
+    const resolved = [];
+    const skipped = [];
+    for (const item of spotifyItems) {
+      try {
+        const tracks = await resolveSearchTrack(item.query);
+        if (!tracks[0]) {
+          skipped.push(item.title);
+          continue;
         }
-        return;
-    }
-
-    // 2. Trường hợp người dùng rời phòng và chế độ 24/7 đang TẮT
-    if (!botState.stay247 && botState.channelId && oldState.channelId === botState.channelId) {
-        const channel = oldState.guild.channels.cache.get(botState.channelId);
-        if (channel) {
-            const humanMembers = channel.members.filter(m => !m.user.bot);
-            if (humanMembers.size === 0) {
-                console.log('[Edward ϟ Radio] Phòng trống và chế độ 24/7 đang TẮT -> Tự rời phòng.');
-                player.stop();
-                if (ffmpegProcess) {
-                    ffmpegProcess.kill();
-                    ffmpegProcess = null;
-                }
-                const conn = getVoiceConnection(oldState.guild.id);
-                if (conn) conn.destroy();
-                botState.isPlaying = false;
-                botState.channelId = null;
-                botState.guildId = null;
-                botState.invitedByUserId = null;
-                saveState();
-            }
-        }
-    }
-});
-
-// Xử lý Slash Commands & Nút bấm
-client.on('interactionCreate', async interaction => {
-    // XỬ LÝ NÚT BẤM (BUTTONS)
-    if (interaction.isButton()) {
-        const userVoice = interaction.member.voice.channel;
-        if (!userVoice || userVoice.id !== botState.channelId) {
-            return interaction.reply({ content: '❌ Bạn phải ở cùng phòng thoại với bot để bấm nút điều khiển!', ephemeral: true });
-        }
-
-        if (interaction.customId === 'btn_pause_resume') {
-            if (player.state.status === AudioPlayerStatus.Paused) {
-                player.unpause();
-            } else {
-                player.pause();
-            }
-            return interaction.update({ embeds: [createNowPlayingEmbed()], components: [createControlButtons()] });
-        }
-
-        if (interaction.customId === 'btn_random') {
-            const keys = Object.keys(STATIONS).filter(k => k !== botState.station);
-            botState.station = keys[Math.floor(Math.random() * keys.length)];
-            await playRadio();
-            return interaction.update({ embeds: [createNowPlayingEmbed()], components: [createControlButtons()] });
-        }
-
-        if (interaction.customId === 'btn_247') {
-            botState.stay247 = !botState.stay247;
-            saveState();
-            return interaction.update({ embeds: [createNowPlayingEmbed()], components: [createControlButtons()] });
-        }
-    }
-
-    // XỬ LÝ LỆNH SLASH (/play, /stop, /volume,...)
-    if (!interaction.isChatInputCommand()) return;
-
-    const { commandName } = interaction;
-
-    if (commandName === 'join') {
-        const requestedChannel = interaction.options.getChannel('room');
-        const target = getTargetVoiceChannel(interaction.guild, interaction.member, requestedChannel);
-        if (!target) {
-            return interaction.reply({ content: '❌ Hãy chọn `room` hoặc vào một phòng thoại trước.', ephemeral: true });
-        }
-        const inviter = botState.channelId === target.id ? botState.invitedByUserId : interaction.user.id;
-        const connected = await connectAndPlay(interaction.guild.id, target.id, inviter, false);
-        if (!connected) return interaction.reply({ content: '❌ Bot không thể vào phòng thoại này.', ephemeral: true });
-        return interaction.reply(`✅ Đã vào <#${target.id}>. Chỉ người gọi lệnh này mới có quyền dùng \/leave.`);
-    }
-
-    if (commandName === 'leave') {
-        if (!canInviteUserLeave(interaction.user.id, interaction.guild.id)) {
-            return interaction.reply({ content: '❌ Chỉ người đã mời bot vào phòng hiện tại mới có thể dùng lệnh này.', ephemeral: true });
-        }
-        await leaveVoice(interaction.guild.id);
-        return interaction.reply('👋 Bot đã rời phòng thoại.');
-    }
-
-    if (commandName === 'play') {
-        const target = getTargetVoiceChannel(interaction.guild, interaction.member, null);
-        if (!target) {
-            return interaction.reply({ content: '❌ Hãy vào phòng thoại hoặc dùng `/join room` trước.', ephemeral: true });
-        }
-
-        const chosenStation = interaction.options.getString('station');
-        const query = interaction.options.getString('query');
-        const inviter = botState.channelId === target.id ? botState.invitedByUserId : interaction.user.id;
-        const connected = await connectAndPlay(interaction.guild.id, target.id, inviter, false);
-        if (!connected) return interaction.reply({ content: '❌ Bot không thể vào phòng thoại này.', ephemeral: true });
-
-        try {
-            if (query) {
-                await playSource(await resolveTrack(query));
-            } else {
-                if (chosenStation) botState.station = chosenStation;
-                await playRadio();
-            }
-        } catch (error) {
-            console.error('[Edward ϟ Radio] Không thể phát nguồn:', error);
-            return interaction.reply({ content: `❌ Không thể phát nguồn này: ${error.message}`, ephemeral: true });
-        }
-
-        return interaction.reply({ embeds: [createNowPlayingEmbed()], components: [createControlButtons()] });
-    }
-
-    if (commandName === 'station') {
-        const list = Object.entries(STATIONS)
-            .map(([key, val]) => `• **${val.name}** (\`${key}\`)\n  └ *${val.desc}*`)
-            .join('\n\n');
-
-        const embed = new EmbedBuilder()
-            .setColor('#3498DB')
-            .setTitle('📻 Danh sách các đài của Edward ϟ Radio')
-            .setDescription(`${list}\n\n💡 **Mẹo:** Gõ lệnh \`/play [kênh]\` để chọn đài bạn muốn phát!`)
-            .setTimestamp();
-
-        return interaction.reply({ embeds: [embed] });
-    }
-
-    if (commandName === 'volume') {
-        if (!botState.isPlaying || !currentResource) {
-            return interaction.reply({ content: '❌ Bot hiện chưa phát nhạc! Hãy dùng `/play` trước.', ephemeral: true });
-        }
-
-        const vol = interaction.options.getInteger('level');
-        botState.volume = vol;
-        currentResource.volume.setVolume(vol / 100);
-        saveState();
-
-        return interaction.reply(`🔉 Đã điều chỉnh âm lượng của **Edward ϟ Radio** thành **${vol}%**.`);
-    }
-
-    if (commandName === '247') {
-        botState.stay247 = !botState.stay247;
-        saveState();
-
-        return interaction.reply(
-            botState.stay247
-                ? '🟢 **Đã BẬT chế độ 24/7!** Edward ϟ Radio sẽ tự treo một mình trong phòng không giới hạn thời gian.'
-                : '🔴 **Đã TẮT chế độ 24/7!** Bot sẽ tự rời phòng nếu không còn ai nghe.'
-        );
-    }
-
-    if (commandName === 'nowplaying') {
-        if (!botState.isPlaying) {
-            return interaction.reply({ content: '❌ Hiện không có đài nào đang phát. Hãy dùng `/play` để bắt đầu!', ephemeral: true });
-        }
-        return interaction.reply({
-            embeds: [createNowPlayingEmbed()],
-            components: [createControlButtons()]
+        resolved.push({
+          encoded: tracks[0].encoded,
+          title: item.title,
+          uri: tracks[0].info?.uri || null,
+          duration: item.duration || tracks[0].info?.length || 0,
+          artworkUrl: item.artworkUrl,
+          requester: null
         });
+      } catch (error) {
+        skipped.push(item.title);
+        console.warn(`[Spotify] Bỏ qua "${item.title}": ${error.message}`);
+      }
     }
+    return {
+      tracks: resolved,
+      skipped,
+      playlistName: reference.type === 'track' ? null : 'Spotify collection'
+    };
+  }
 
-    if (commandName === 'stop') {
-        if (!canInviteUserLeave(interaction.user.id, interaction.guild.id)) {
-            return interaction.reply({ content: '❌ Chỉ người đã mời bot vào phòng hiện tại mới có thể dừng bot.', ephemeral: true });
-        }
-        await leaveVoice(interaction.guild.id);
-        return interaction.reply('👋 **Edward ϟ Radio** đã dừng phát nhạc và rời khỏi phòng thoại.');
-    }
-
-    if (commandName === 'help') {
-        const embed = new EmbedBuilder()
-            .setColor('#F1C40F')
-            .setAuthor({ name: 'Edward ϟ Radio — Hướng dẫn sử dụng', iconURL: client.user.displayAvatarURL() })
-            .setDescription('Bot phát nhạc Lofi & Chill tự động treo phòng 24/7.')
-            .addFields(
-                { name: '`/play [kênh]`', value: 'Gọi bot vào phòng thoại của bạn và bắt đầu phát nhạc.' },
-                { name: '`/station`', value: 'Xem toàn bộ danh sách các đài Radio hiện có.' },
-                { name: '`/247`', value: 'Bật/Tắt chế độ tự động treo 24/7 kể cả khi phòng trống.' },
-                { name: '`/volume [1-100]`', value: 'Tăng/giảm âm lượng phát nhạc trực tiếp.' },
-                { name: '`/nowplaying`', value: 'Mở lại bảng điều khiển nút bấm và xem đài đang phát.' },
-                { name: '`/stop`', value: 'Cho phép bot dừng nhạc và thoát khỏi phòng thoại.' }
-            )
-            .setFooter({ text: 'Edward ϟ Radio • Luôn đồng hành cùng bạn 24/7' });
-
-        return interaction.reply({ embeds: [embed] });
-    }
-});
-
-function findMessageVoiceChannel(message, args) {
-    const mentionedChannel = message.mentions.channels.first();
-    if (mentionedChannel && mentionedChannel.isVoiceBased()) return mentionedChannel;
-
-    const channelId = args[0]?.match(/^<#(\d+)>$/)?.[1];
-    if (channelId) {
-        const channel = message.guild.channels.cache.get(channelId);
-        return channel?.isVoiceBased() ? channel : null;
-    }
-
-    const requestedName = args.join(' ').trim().toLowerCase();
-    if (requestedName) {
-        return message.guild.channels.cache.find(channel =>
-            channel.isVoiceBased() && channel.name.toLowerCase() === requestedName
-        ) || null;
-    }
-
-    return message.member.voice.channel || null;
+  const tracks = isUrl(input)
+    ? await resolveLavalink(input)
+    : await resolveSearchTrack(input);
+  return {
+    tracks: tracks.map((track) => ({
+      encoded: track.encoded,
+      title: track.info?.author ? `${track.info.author} - ${track.info.title}` : track.info?.title || 'Unknown track',
+      uri: track.info?.uri || null,
+      duration: track.info?.length || 0,
+      artworkUrl: track.info?.artworkUrl || null,
+      requester: null
+    })),
+    playlistName: tracks.length > 1 ? 'Playlist' : null,
+    skipped: []
+  };
 }
 
-client.on('messageCreate', async message => {
-    if (message.author.bot || !message.guild) return;
-
-    const parts = message.content.trim().split(/\s+/);
-    const command = parts.shift()?.toLowerCase();
-    if (!['edj', 'edl', 'edp'].includes(command)) return;
-
+async function resolveSearchTrack(query) {
+  const searchPrefixes = ['ytsearch:', 'ytmsearch:'];
+  let lastError = null;
+  for (const prefix of searchPrefixes) {
     try {
-        if (command === 'edj') {
-            const target = findMessageVoiceChannel(message, parts);
-            if (!target) return message.reply('❌ Dùng `edj` khi đang ở voice hoặc `edj #TênRoom`.');
-            const inviter = botState.channelId === target.id ? botState.invitedByUserId : message.author.id;
-            const connected = await connectAndPlay(message.guild.id, target.id, inviter, false);
-            return message.reply(connected
-                ? `✅ Đã vào <#${target.id}>. Chỉ bạn mới có thể dùng \`edl\`.`
-                : '❌ Bot không thể vào phòng thoại này.');
-        }
-
-        if (command === 'edl') {
-            if (!canInviteUserLeave(message.author.id, message.guild.id)) {
-                return message.reply('❌ Chỉ người đã mời bot vào phòng hiện tại mới có thể dùng `edl`.');
-            }
-            await leaveVoice(message.guild.id);
-            return message.reply('👋 Bot đã rời phòng thoại.');
-        }
-
-        const target = getTargetVoiceChannel(message.guild, message.member, null);
-        if (!target) return message.reply('❌ Hãy vào voice trước hoặc dùng `edj #TênRoom`.');
-        if (parts.length === 0) return message.reply('❌ Dùng `edp tên bài`, link YouTube hoặc link Spotify.');
-        const inviter = botState.channelId === target.id ? botState.invitedByUserId : message.author.id;
-        const connected = await connectAndPlay(message.guild.id, target.id, inviter, false);
-        if (!connected) return message.reply('❌ Bot không thể vào phòng thoại này.');
-        await playSource(await resolveTrack(parts.join(' ')));
-        return message.reply(`▶️ Đang phát **${currentSource.title}**.`);
+      const tracks = await resolveLavalink(`${prefix}${query}`);
+      if (tracks.length) return tracks;
     } catch (error) {
-        console.error(`[Edward ϟ Radio] Lỗi ${command}:`, error);
-        return message.reply(`❌ Không thể xử lý lệnh: ${error.message}`);
+      lastError = error;
     }
+  }
+  throw lastError || new Error(`Không tìm thấy bài hát cho: ${query}`);
+}
+
+async function ensurePlayer(guild, channelId) {
+  const state = stateFor(guild.id);
+  const actualChannelId = guild.members.me?.voice?.channelId || null;
+  if (actualChannelId && actualChannelId !== channelId) {
+  const existing = shoukaku.players.get(guild.id);
+  if (existing) await shoukaku.leaveVoiceChannel(guild.id);
+  }
+  if (actualChannelId === channelId || !actualChannelId) state.channelId = channelId;
+  const existing = shoukaku.players.get(guild.id);
+  if (existing) return existing;
+  const player = await shoukaku.joinVoiceChannel({
+    guildId: guild.id,
+    shardId: guild.shardId ?? 0,
+    channelId,
+    deaf: true,
+    mute: false
+  });
+  player.on('start', async () => {
+    const currentState = stateFor(guild.id);
+    const current = currentState.current;
+    currentState.playing = true;
+    console.log(`[Player:${guild.id}] Bắt đầu phát: ${current?.title || 'track không có metadata'}`);
+    if (currentState.textChannelId && current) {
+      const channel = await client.channels.fetch(currentState.textChannelId).catch(() => null);
+      if (channel?.isTextBased()) {
+        await channel.send(`▶️ Đang phát: **${current.title}**`).catch((error) => {
+          console.warn(`[Player:${guild.id}] Không thể gửi Now Playing: ${error.message}`);
+        });
+      }
+    }
+    await saveState();
+  });
+  player.on('end', async (data) => {
+    const state = stateFor(guild.id);
+    console.log(`[Player:${guild.id}] Track kết thúc: ${data?.reason || 'unknown'}`);
+    state.playing = false;
+    setTimeout(() => playNext(guild.id).catch((error) => {
+      console.error(`[Player:${guild.id}] Không thể phát track kế tiếp:`, error);
+    }), 100);
+  });
+  player.on('exception', async (error) => {
+    console.error(`[Player:${guild.id}] Track exception:`, error);
+    stateFor(guild.id).playing = false;
+    setTimeout(() => playNext(guild.id).catch((nextError) => {
+      console.error(`[Player:${guild.id}] Không thể phục hồi player:`, nextError);
+    }), 100);
+  });
+  player.on('stuck', async (threshold) => {
+    console.warn(`[Player:${guild.id}] Kẹt sau ${threshold}ms.`);
+    await player.stopTrack();
+  });
+  player.on('closed', (reason) => console.warn(`[Player:${guild.id}] Đóng:`, reason));
+  player.on('update', (data) => {
+    const position = data.state?.position || 0;
+    if (position === 0 || position % 30_000 < 1_000) {
+      console.log(`[Player:${guild.id}] Voice update: position=${position}ms, ping=${data.state?.ping ?? player.ping}ms, connected=${data.state?.connected}`);
+    }
+  });
+  return player;
+}
+
+async function playEncoded(player, encoded, volume) {
+  if (!encoded) throw new Error('Track Lavalink không có mã encoded.');
+  console.log(`[Player:${player.guildId}] Gửi track tới Lavalink, volume=${volume}`);
+  await player.playTrack({
+    track: { encoded }
+  });
+  await player.setGlobalVolume(Math.max(1, Math.min(100, Number(volume) || DEFAULT_VOLUME)));
+  stateFor(player.guildId).playing = true;
+  console.log(`[Player:${player.guildId}] Lavalink đã nhận track.`);
+}
+
+async function playNext(guildId) {
+  const state = stateFor(guildId);
+  const player = shoukaku.players.get(guildId);
+  if (!player) return;
+  if (state.transitioning) return;
+  state.transitioning = true;
+  try {
+    if (state.mode === 'radio' && state.station) {
+      state.current = state.station;
+      await playEncoded(player, state.station.encoded, state.volume);
+      state.playing = true;
+      await saveState();
+      return;
+    }
+    const next = state.queue[0];
+    if (!next) {
+      state.current = null;
+      state.playing = false;
+      await saveState();
+      return;
+    }
+    state.current = next;
+    await playEncoded(player, next.encoded, state.volume);
+    state.queue.shift();
+    state.playing = true;
+    await saveState();
+    console.log(`[Player:${guildId}] Current track: ${next.title}; remaining=${state.queue.length}`);
+  } finally {
+    state.transitioning = false;
+  }
+}
+
+async function startRadio(guild, stationKey, channelId) {
+  const station = RADIO_STATIONS[stationKey];
+  if (!station?.url) throw new Error(`Radio "${stationKey}" chưa được cấu hình URL.`);
+  const tracks = await resolveLavalink(station.url);
+  if (!tracks[0]?.encoded) throw new Error(`Radio "${station.name}" không trả về audio hợp lệ.`);
+  const state = stateFor(guild.id);
+  const player = await ensurePlayer(guild, channelId);
+  state.mode = 'radio';
+  state.station = {
+    encoded: tracks[0].encoded,
+    title: station.name,
+    duration: tracks[0].info?.length || 0,
+    artworkUrl: tracks[0].info?.artworkUrl || null
+  };
+  state.queue = [];
+  state.current = state.station;
+  await playEncoded(player, state.station.encoded, state.volume);
+  state.playing = true;
+  await saveState();
+}
+
+async function saveState() {
+  const data = Object.fromEntries(guildStates);
+  await fs.writeFile(STATE_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+async function loadState() {
+  try {
+    const data = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+    if (data.guildId) {
+      const state = { ...stateFor(data.guildId), ...data, playing: false, transitioning: false };
+      if (state.mode === 'queue' && state.current?.encoded) {
+        state.queue.unshift(state.current);
+        state.current = null;
+      }
+      guildStates.set(data.guildId, state);
+      return;
+    }
+    for (const [guildId, state] of Object.entries(data)) {
+      if (state && typeof state === 'object' && state.guildId) {
+        const restored = { ...stateFor(guildId), ...state, playing: false, transitioning: false };
+        if (restored.mode === 'queue' && restored.current?.encoded) {
+          restored.queue.unshift(restored.current);
+          restored.current = null;
+        }
+        guildStates.set(guildId, restored);
+      }
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error('[State] Không thể đọc state.json:', error.message);
+  }
+}
+
+function requestedVoiceChannel(guild, member, requestedChannel = null) {
+  if (requestedChannel) {
+    if (!requestedChannel.isVoiceBased()) throw new Error('room phải là voice channel.');
+    return requestedChannel;
+  }
+  if (member?.voice?.channel) return member.voice.channel;
+  const state = stateFor(guild.id);
+  if (state.channelId) return guild.channels.cache.get(state.channelId) || null;
+  return null;
+}
+
+function voiceChannel(interaction) {
+  const channel = requestedVoiceChannel(interaction.guild, interaction.member);
+  if (!channel) throw new Error('Bạn phải vào phòng thoại trước hoặc dùng /join room:<room>.');
+  return channel;
+}
+
+async function handleJoin(target, requestedChannel = null) {
+  const guild = target.guild;
+  const channel = requestedVoiceChannel(guild, target.member, requestedChannel);
+  if (!channel) throw new Error('Chọn room hoặc vào một phòng thoại trước.');
+  const state = stateFor(guild.id);
+  const wasSameChannel = state.channelId === channel.id;
+  await ensurePlayer(guild, channel.id);
+  state.channelId = channel.id;
+  if (!wasSameChannel || !state.invitedByUserId) {
+    state.invitedByUserId = target.user?.id || target.author?.id;
+  }
+  await saveState();
+  return reply(target, `✅ Đã vào <#${channel.id}>. Chỉ người mời bot mới có thể dùng /leave hoặc edl.`);
+}
+
+async function handleLeave(target) {
+  const state = stateFor(target.guild.id);
+  const userId = target.user?.id || target.author?.id;
+  if (!state.channelId) throw new Error('Bot hiện không ở trong phòng thoại.');
+  if (state.invitedByUserId !== userId) {
+    throw new Error('Chỉ người đã mời bot vào phòng hiện tại mới có thể dùng lệnh này.');
+  }
+  const player = shoukaku.players.get(target.guild.id);
+  if (player) await shoukaku.leaveVoiceChannel(target.guild.id);
+  state.queue = [];
+  state.current = null;
+  state.playing = false;
+  state.mode = 'queue';
+  state.station = null;
+  state.stay247 = false;
+  state.channelId = null;
+  state.invitedByUserId = null;
+  await saveState();
+  return reply(target, '👋 Bot đã rời phòng thoại.');
+}
+
+function commandBuilders() {
+  return [
+    new SlashCommandBuilder().setName('play').setDescription('Phát bài hát, playlist, Spotify hoặc radio')
+      .addStringOption((option) => option.setName('mode').setDescription('Chế độ phát; mặc định queue').setRequired(false)
+        .addChoices(
+          { name: 'Queue - bài hát/playlist/Spotify', value: 'queue' },
+          { name: 'Station - radio 24/7', value: 'station' }
+        ))
+      .addStringOption((option) => option.setName('query').setDescription('Tên bài hát, URL YouTube hoặc Spotify').setRequired(false))
+      .addStringOption((option) => option.setName('station').setDescription('Trạm radio').setRequired(false)
+        .addChoices(
+          { name: 'Lofi Hip Hop', value: 'lofi' },
+          { name: 'Chillsynth', value: 'chillsynth' },
+          { name: 'Smooth Jazz', value: 'jazz' },
+          { name: 'Peaceful Piano', value: 'piano' }
+        )),
+    new SlashCommandBuilder().setName('join').setDescription('Đưa bot vào phòng thoại')
+      .addChannelOption((option) => option.setName('room').setDescription('Phòng thoại đích; bỏ trống để dùng phòng hiện tại').setRequired(false)),
+    new SlashCommandBuilder().setName('leave').setDescription('Đưa bot rời phòng; chỉ người đã mời bot mới dùng được'),
+    new SlashCommandBuilder().setName('shuffle').setDescription('Tráo hàng đợi'),
+    new SlashCommandBuilder().setName('skip').setDescription('Bỏ qua bài hiện tại'),
+    new SlashCommandBuilder().setName('queue').setDescription('Xem hàng đợi'),
+    new SlashCommandBuilder().setName('deleteall').setDescription('Xóa toàn bộ bài đang chờ trong hàng đợi'),
+    new SlashCommandBuilder().setName('delete').setDescription('Xóa bài theo vị trí trong hàng đợi')
+      .addIntegerOption((option) => option.setName('position').setDescription('Vị trí bài trong queue, bắt đầu từ 1').setMinValue(1).setRequired(true)),
+    new SlashCommandBuilder().setName('total').setDescription('Xem tổng thời lượng'),
+    new SlashCommandBuilder().setName('volume').setDescription('Chỉnh âm lượng')
+      .addIntegerOption((option) => option.setName('value').setDescription('1-100').setMinValue(1).setMaxValue(100).setRequired(true)),
+    new SlashCommandBuilder().setName('247').setDescription('Bật/tắt treo phòng 24/7'),
+    new SlashCommandBuilder().setName('stop').setDescription('Dừng và rời phòng')
+  ].map((command) => command.toJSON());
+}
+
+async function registerCommands() {
+  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+  const route = process.env.DISCORD_GUILD_ID
+    ? Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.DISCORD_GUILD_ID)
+    : Routes.applicationCommands(process.env.DISCORD_CLIENT_ID);
+  await rest.put(route, { body: commandBuilders() });
+}
+
+async function reply(target, content) {
+  if (target.replied || target.deferred) return target.editReply(content);
+  return target.reply(content);
+}
+
+async function handlePlay(target, query, mode = 'queue') {
+  const guild = target.guild;
+  const channel = voiceChannel(target);
+  const state = stateFor(guild.id);
+  state.textChannelId = target.channel?.id || state.textChannelId;
+  if (mode === 'station') {
+    const radioKey = query?.toLowerCase();
+    if (!RADIO_STATIONS[radioKey]) {
+      throw new Error('Chọn một station: lofi, chillsynth, jazz hoặc piano.');
+    }
+    await startRadio(guild, radioKey, channel.id);
+    return reply(target, `📻 Đang phát **${RADIO_STATIONS[radioKey].name}**.`);
+  }
+  if (!query?.trim()) throw new Error('Nhập tên bài hát hoặc URL để thêm vào queue.');
+
+  const result = await resolveRequest(query);
+  if (!result.tracks.length) throw new Error('Không có bài hát hợp lệ trong yêu cầu.');
+  if (state.queue.length + result.tracks.length > MAX_QUEUE_SIZE) {
+    throw new Error(`Hàng đợi tối đa ${MAX_QUEUE_SIZE} bài.`);
+  }
+  for (const track of result.tracks) track.requester = target.user?.tag || target.author?.tag || 'Unknown';
+  const player = await ensurePlayer(guild, channel.id);
+  const replacingRadio = state.mode === 'radio' && state.playing;
+  state.mode = 'queue';
+  state.station = null;
+  state.queue.push(...result.tracks);
+  if (replacingRadio) {
+    state.playing = false;
+    await player.stopTrack();
+  }
+  const lavalinkHasTrack = Boolean(player.track);
+  if (!lavalinkHasTrack || !state.playing) await playNext(guild.id);
+  await saveState();
+  const addedNames = result.tracks.slice(0, 10).map((track) => `• ${track.title}`).join('\n');
+  const skippedText = result.skipped?.length
+    ? `\n⚠️ Bỏ qua ${result.skipped.length} bài không resolve được.`
+    : '';
+  return reply(target, `✅ Đã thêm **${result.tracks.length}** bài vào hàng đợi:\n${addedNames}${skippedText}\nTổng: **${duration(totalDuration(state))}**.`);
+}
+
+async function handleCommand(target, command, args) {
+  const state = stateFor(target.guild.id);
+  state.textChannelId = target.channel?.id || state.textChannelId;
+  if (command === 'play' || command === 'p') return handlePlay(target, args.join(' '), 'queue');
+  if (command === 'join' || command === 'j') return handleJoin(target);
+  if (command === 'leave' || command === 'l') return handleLeave(target);
+  if (command === 'shuffle') {
+    for (let index = state.queue.length - 1; index > 0; index -= 1) {
+      const random = Math.floor(Math.random() * (index + 1));
+      [state.queue[index], state.queue[random]] = [state.queue[random], state.queue[index]];
+    }
+    await saveState();
+    return reply(target, `🔀 Đã tráo **${state.queue.length}** bài.`);
+  }
+  if (command === 'skip') {
+    const player = shoukaku.players.get(target.guild.id);
+    if (!player) throw new Error('Bot chưa phát nhạc.');
+    await player.stopTrack();
+    return reply(target, '⏭️ Đã bỏ qua bài hiện tại.');
+  }
+  if (command === 'queue') {
+    const lines = state.queue.slice(0, 15).map((track, index) => `${index + 1}. ${track.title} (${duration(track.duration)})`);
+    const currentLine = state.current
+      ? `▶️ Đang phát: **${state.current.title}** (${duration(state.current.duration)})`
+      : '';
+    if (!lines.length && !currentLine) return reply(target, 'Hàng đợi đang trống.');
+    return reply(target, `🎶 **Hàng đợi**${currentLine ? `\n${currentLine}` : ''}${lines.length ? `\n${lines.join('\n')}` : ''}`);
+  }
+  if (command === 'deleteall') {
+    const removed = state.queue.length;
+    state.queue = [];
+    await saveState();
+    return reply(target, removed
+      ? `🗑️ Đã xóa **${removed}** bài đang chờ. Bài hiện tại vẫn được phát.`
+      : 'Hàng đợi đang trống.');
+  }
+  if (command === 'delete') {
+    const position = Number.parseInt(args[0], 10);
+    if (!Number.isInteger(position) || position < 1 || position > state.queue.length) {
+      throw new Error(`Vị trí phải từ 1 đến ${state.queue.length}.`);
+    }
+    const [removed] = state.queue.splice(position - 1, 1);
+    await saveState();
+    return reply(target, `🗑️ Đã xóa bài số **${position}**: **${removed.title}**.`);
+  }
+  if (command === 'total') return reply(target, `⏱️ Tổng thời lượng: **${duration(totalDuration(state))}**.`);
+  if (command === 'volume') {
+    const value = Number.parseInt(args[0], 10);
+    if (!Number.isInteger(value) || value < 1 || value > 100) throw new Error('Âm lượng phải từ 1 đến 100.');
+    state.volume = value;
+    const player = shoukaku.players.get(target.guild.id);
+    if (player) await player.setGlobalVolume(value);
+    await saveState();
+    return reply(target, `🔊 Âm lượng: **${value}%**.`);
+  }
+  if (command === '247') {
+    state.stay247 = !state.stay247;
+    await saveState();
+    return reply(target, `♾️ Chế độ treo phòng: **${state.stay247 ? 'BẬT' : 'TẮT'}**.`);
+  }
+  if (command === 'stop') return handleLeave(target);
+  throw new Error('Lệnh không hợp lệ.');
+}
+
+shoukaku.on('error', (name, error) => {
+  console.error(`[Lavalink:${name}] ${error?.stack || error?.message || error}`);
+});
+shoukaku.on('disconnect', (name, count) => console.warn(`[Lavalink:${name}] Ngắt kết nối (${count}).`));
+shoukaku.on('ready', (name) => console.log(`[Lavalink:${name}] Sẵn sàng.`));
+shoukaku.on('debug', (message) => console.debug(`[Lavalink] ${message}`));
+
+client.on('clientReady', async () => {
+  client.user.setActivity('Edward ϟ Radio', { type: ActivityType.Listening });
+  console.log(`Đăng nhập Discord: ${client.user.tag}`);
+  try {
+    await registerCommands();
+    console.log('Đã đăng ký slash commands.');
+  } catch (error) {
+    console.error('[Commands] Đăng ký thất bại:', error.message);
+  }
 });
 
-client.login(process.env.TOKEN);
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand() || !interaction.guild) return;
+  try {
+    await interaction.deferReply();
+    const args = interaction.commandName === 'play'
+      ? [interaction.options.getString('query') || interaction.options.getString('station')]
+      : interaction.commandName === 'volume'
+        ? [String(interaction.options.getInteger('value', true))]
+        : interaction.commandName === 'delete'
+          ? [String(interaction.options.getInteger('position', true))]
+        : [];
+    if (interaction.commandName === 'play') {
+      await handlePlay(
+        interaction,
+        args[0],
+        interaction.options.getString('mode') || 'queue'
+      );
+    } else if (interaction.commandName === 'join') {
+      await handleJoin(interaction, interaction.options.getChannel('room'));
+    } else if (interaction.commandName === 'leave') {
+      await handleLeave(interaction);
+    } else {
+      await handleCommand(interaction, interaction.commandName, args);
+    }
+  } catch (error) {
+    console.error('[Interaction]', error);
+    await reply(interaction, `❌ ${error.message || 'Đã xảy ra lỗi.'}`);
+  }
+});
+
+function messageVoiceChannel(message, args) {
+  const mentioned = message.mentions.channels.first();
+  if (mentioned?.isVoiceBased()) return mentioned;
+  const id = args[0]?.match(/^<#(\d+)>$/)?.[1];
+  if (id) {
+    const channel = message.guild.channels.cache.get(id);
+    if (channel?.isVoiceBased()) return channel;
+  }
+  const name = args.join(' ').trim().toLowerCase();
+  if (name) {
+    return message.guild.channels.cache.find((channel) =>
+      channel.isVoiceBased() && channel.name.toLowerCase() === name
+    ) || null;
+  }
+  return null;
+}
+
+client.on('messageCreate', async (message) => {
+  if (message.author.bot || !message.guild || !message.content.toLowerCase().startsWith(PREFIX)) return;
+  const parts = message.content.slice(PREFIX.length).trim().split(/\s+/);
+  const command = (parts.shift() || '').toLowerCase();
+  const aliases = {
+    edp: 'play',
+    edj: 'join',
+    edl: 'leave',
+    edsf: 'shuffle',
+    eds: 'skip',
+    edq: 'queue',
+    eddlall: 'deleteall',
+    eddl: 'delete',
+    edt: 'total',
+    edvol: 'volume',
+    ed247: '247',
+    edstop: 'stop'
+  };
+  const normalized = aliases[`${PREFIX}${command}`] || aliases[command] || command;
+  try {
+    if (normalized === 'join') {
+      await handleJoin(message, messageVoiceChannel(message, parts));
+    } else {
+      await handleCommand(message, normalized, parts);
+    }
+  } catch (error) {
+    console.error('[Prefix]', error);
+    await message.reply(`❌ ${error.message || 'Đã xảy ra lỗi.'}`);
+  }
+});
+
+client.on('voiceStateUpdate', async (oldState, newState) => {
+  if (newState.member?.id === client.user?.id) {
+    const state = stateFor(newState.guild.id);
+    state.channelId = newState.channelId;
+    await saveState();
+    console.log(`[Voice:${newState.guild.id}] Bot chuyển sang: ${newState.channelId || 'không ở phòng thoại'}`);
+    return;
+  }
+  if (!oldState.channelId || newState.channelId || oldState.channelId !== stateFor(oldState.guild.id).channelId) return;
+  const state = stateFor(oldState.guild.id);
+  if (state.stay247 && oldState.channel?.members.filter((member) => !member.user.bot).size === 0) {
+    const player = shoukaku.players.get(oldState.guild.id);
+    if (!player) {
+      try {
+        await ensurePlayer(oldState.guild, state.channelId);
+        if (state.current?.encoded) await playNext(oldState.guild.id);
+      } catch (error) {
+        console.error('[24/7] Không thể nối lại:', error.message);
+      }
+    }
+  }
+});
+
+process.on('unhandledRejection', (error) => console.error('[Unhandled Rejection]', error));
+process.on('uncaughtException', (error) => console.error('[Uncaught Exception]', error));
+
+(async () => {
+  if (!process.env.DISCORD_TOKEN || !process.env.DISCORD_CLIENT_ID) {
+    throw new Error('Thiếu DISCORD_TOKEN hoặc DISCORD_CLIENT_ID trong .env.');
+  }
+  await loadState();
+  await client.login(process.env.DISCORD_TOKEN);
+})().catch((error) => {
+  console.error('[Startup]', error);
+  process.exitCode = 1;
+});

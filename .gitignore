@@ -1,5 +1,7 @@
 node_modules/
 .env
 state.json
+playlists.json
+lavalink/application.yml
 npm-debug.log*
 .DS_Store

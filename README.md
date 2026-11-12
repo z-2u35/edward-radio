@@ -1,93 +1,120 @@
-# ⚡ Edward ϟ Radio (Discord 24/7 Lofi Bot)
+# Edward ϟ Radio
 
-Bot Discord phát nhạc Lofi, Chill, Jazz và Piano trực tuyến hoạt động 24/7 tương tự **Lofi Radio**.
+Discord Music Bot dùng **Discord.js v14 + Lavalink v4 + Shoukaku**. Lavalink đảm nhiệm toàn bộ kết nối stream, vì vậy tiến trình bot không chạy yt-dlp/FFmpeg và không phải tự tải audio từ YouTube trên Render.
 
-## ✨ Tính năng chính
-- **`/play [station/query]`**: Gọi bot vào phòng thoại và phát radio hoặc nguồn nhạc.
-- **`/join [room]`**, **`edj [#room]`**: Đưa bot vào phòng thoại; có thể chỉ định room khi người gọi không ở voice.
-- **`/leave`**, **`edl`**: Đưa bot rời phòng. Chỉ người đã gọi `/join`, `/play` hoặc `edj` để mời bot vào room hiện tại mới dùng được.
-- **`/play [query]`**, **`edp [query]`**: Phát tên bài hát, link YouTube hoặc link Spotify. Link Spotify được dùng để lấy metadata rồi tìm bản tương ứng trên YouTube.
-- **`/247`**: Bật/Tắt chế độ treo 24/7 (tự nhớ phòng trong `state.json` ngay cả khi khởi động lại máy chủ).
-- **`/station`**: Xem danh sách các đài Radio hiện có.
-- **`/volume [1-100]`**: Điều chỉnh âm lượng trực tiếp.
-- **`/nowplaying`**: Hiển thị bảng điều khiển kèm nút bấm nhanh (Tạm dừng, Đổi đài ngẫu nhiên, Bật/Tắt 24/7).
-- **`/stop`**: Dừng phát nhạc và cho bot rời phòng thoại.
+## Tính năng
 
-Bot dùng `ffmpeg-static` để chuyển các URL radio trực tuyến thành audio Discord,
-nên không cần chạy Lavalink cho các đài radio này.
+- Phát YouTube, SoundCloud, truy vấn tìm kiếm và link playlist.
+- Spotify Web API Client Credentials cho track, album và playlist; tên nghệ sĩ, ảnh bìa và thời lượng lấy từ Spotify.
+- Queue, shuffle, skip, tổng thời lượng, volume 1-100 và tự động chuyển bài.
+- Radio Lofi, Chillsynth, Smooth Jazz, Peaceful Piano qua URL stream cấu hình trong `.env`.
+- Chế độ treo phòng 24/7 và lưu trạng thái vào `state.json`.
+- Slash commands và prefix aliases: `/join`, `/leave`, `edj`, `edl`, `edp`, `edsf`, `eds`, `edq`, `eddlall`, `eddl <n>`, `edt`, `edvol`, `ed247`, `edstop`.
 
-## 🚀 Hướng dẫn cài đặt & chạy Bot
+## Cài đặt
 
-1. **Cài đặt thư viện:**
-   ```bash
-   npm install
-   ```
+1. Cài Node.js 20+ và chạy Lavalink v4 trên một máy chủ riêng (Render cần một service Lavalink riêng hoặc Lavalink host bên ngoài).
+2. Sao chép `.env.example` thành `.env`, điền token Discord, Client ID, thông tin Lavalink và Spotify.
+3. Cài dependencies và chạy:
 
-2. **Cấu hình biến môi trường:**
-   - Đổi tên file `.env.example` thành `.env`.
-   - Điền `TOKEN` và `CLIENT_ID` của bot vào file `.env`.
-   - Có thể điền `GUILD_ID` để cập nhật Slash Command gần như ngay lập tức trong một server.
+```bash
+npm install
+npm start
+```
 
-3. **Khởi chạy Bot:**
-   ```bash
-   npm start
-   ```
+`DISCORD_GUILD_ID` là tùy chọn. Nếu đặt, slash commands được đăng ký tức thời trong guild đó; nếu bỏ trống, commands đăng ký toàn cầu và có thể mất thời gian đồng bộ.
 
-## Cấu hình Discord bắt buộc
+## Lavalink
 
-Trong Discord Developer Portal:
+Lavalink phải cho phép kết nối từ service bot và dùng cùng `LAVALINK_PASSWORD`.
+Mẫu cấu hình chuẩn nằm tại [`lavalink/application.yml.example`](./lavalink/application.yml.example).
+Lưu ý dependency YouTube phải nằm dưới `lavalink.plugins`; đặt ở cấp YAML root sẽ khiến Lavalink khởi động nhưng không nạp plugin.
 
-1. Bot > **Privileged Gateway Intents**: bật **Message Content Intent** để `edj`, `edl`, `edp` hoạt động.
-2. OAuth2 > URL Generator: chọn `bot` và `applications.commands`.
-3. Cấp quyền tối thiểu: View Channel, Send Messages, Connect, Speak, Use Voice Activity.
+Chạy Lavalink trên cùng VM với bot:
 
-## Test chức năng
+```bash
+sudo mkdir -p /opt/lavalink
+sudo cp lavalink/application.yml.example /opt/lavalink/application.yml
+# Sửa password trong /opt/lavalink/application.yml
+sudo docker run -d \
+  --name lavalink \
+  --restart unless-stopped \
+  -p 127.0.0.1:2333:2333 \
+  -v /opt/lavalink/application.yml:/opt/Lavalink/application.yml:ro \
+  -e _JAVA_OPTIONS="-Xms128M -Xmx420M" \
+  ghcr.io/lavalink-devs/lavalink:4
+```
 
-Sau khi bot online, test theo thứ tự:
+Nếu VM chưa có Docker, cài trước:
+
+```bash
+sudo apt update
+sudo apt install -y docker.io docker-compose-plugin
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+newgrp docker
+```
+
+Sau khi khởi động, kiểm tra `docker logs lavalink` phải có `Lavalink is ready to accept connections`.
+Bot không chứa cơ chế vượt chặn hoặc cookie YouTube; hãy dùng plugin YouTube được cập nhật theo tài liệu Lavalink.
+
+Nếu log YouTube báo `This video requires login` hoặc `No supported audio streams available`,
+đó là YouTube đang chặn client/đòi đăng nhập, không phải lỗi queue Discord. Không dùng OAuth
+với tài khoản chính; có thể đổi track, chờ plugin cập nhật hoặc dùng nguồn Lavalink khác.
+
+Kiểm tra source YouTube trực tiếp trên VM:
+
+```bash
+curl -H "Authorization: MAT_KHAU_LAVALINK" \
+  "http://127.0.0.1:2333/v4/loadtracks?identifier=ytsearch%3Atest"
+```
+
+Kết quả phải có `"loadType":"search"`. Nếu là `empty` hoặc `error`, sửa Lavalink trước khi kiểm tra bot Discord.
+
+## Lệnh
+
+| Lệnh | Tác dụng |
+| --- | --- |
+| `/join room:<room>` | Vào room chỉ định; bỏ trống room để dùng voice hiện tại |
+| `/leave` | Rời room; chỉ người đã mời bot vào room mới dùng được |
+| `/play query:<query>` | Thêm tên bài, URL YouTube hoặc Spotify vào queue; mode mặc định là queue |
+| `/play mode:station station:<station>` | Phát `lofi`, `chillsynth`, `jazz` hoặc `piano` |
+| `/shuffle`, `/skip`, `/queue`, `/total` | Quản lý hàng đợi |
+| `/deleteall` | Xóa toàn bộ bài đang chờ, không dừng bài hiện tại |
+| `/delete position:<n>` | Xóa bài ở vị trí `n` trong hàng đợi |
+| `/volume <1-100>` | Chỉnh âm lượng |
+| `/247` | Bật/tắt treo phòng |
+| `/stop` | Dừng và rời phòng, cũng yêu cầu quyền của người mời |
+
+Prefix tương ứng: `edj [#room]`, `edl`, `edp <query>`, `eddlall` xóa toàn bộ queue, `eddl <n>` xóa bài ở vị trí `n`.
+
+## Test trên Google Cloud
+
+Trong Discord Developer Portal bật **Message Content Intent** và cấp quyền View Channel,
+Send Messages, Embed Links, Read Message History, Connect, Speak, Use Voice Activity.
+
+Trên VM:
+
+```bash
+cp .env.example .env
+nano .env
+npm install
+npm start
+```
+
+Test lần lượt:
 
 ```text
 /join room:<voice-room>
-/play station:lofi
+/play mode:station station:lofi
 /play query:lofi hip hop radio
 /play query:https://www.youtube.com/watch?v=...
 /play query:https://open.spotify.com/track/...
-edj
+edj #voice-room
 edp tên bài hát
 edl
 ```
 
-Spotify không được phát trực tiếp từ Spotify. Bot lấy tên nghệ sĩ/bài hát từ link Spotify rồi tìm audio tương ứng trên YouTube; kết quả có thể khác bản gốc.
+Spotify dùng Web API để lấy metadata rồi tìm audio tương ứng qua Lavalink; Spotify không cung cấp audio stream trực tiếp cho bot.
 
-## Chạy trên Google Cloud trước
-
-Trên Compute Engine, nên dùng Debian 12 hoặc Ubuntu LTS. VM chỉ cần kết nối outbound, không cần mở port HTTP cho bot:
-
-```bash
-sudo apt update
-sudo apt install -y curl git
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
-git clone <URL_REPOSITORY> edward-radio
-cd edward-radio
-npm install
-cp .env.example .env
-nano .env
-npm start
-```
-
-Khi test xong, chạy nền tự khởi động lại bằng PM2:
-
-```bash
-sudo npm install -g pm2
-pm2 start index.js --name edward-radio
-pm2 save
-pm2 startup
-```
-
-Chạy lệnh `pm2 startup` rồi thực hiện đúng lệnh mà terminal in ra. Giữ file `state.json` trên VM để bot nhớ room và người có quyền `/leave` sau khi restart.
-
-## Chạy 24/7
-
-- Google Cloud Compute Engine `e2-micro` có thể thuộc Free Tier nếu tài khoản, khu vực và quota đủ điều kiện; hãy kiểm tra bảng giá trong Billing trước khi tạo máy. Không nên coi VM này là miễn phí tuyệt đối nếu tài khoản đã hết trial hoặc dùng tài nguyên ngoài hạn mức.
-- Lựa chọn miễn phí lâu dài thường dùng là Oracle Cloud Always Free (VM Ampere A1), nhưng phụ thuộc khu vực còn quota và vẫn yêu cầu phương thức thanh toán để xác minh.
-- Trên Debian/Ubuntu, cài Node.js rồi chạy bot bằng `systemd` hoặc PM2 để tự khởi động lại. Không cần cài Lavalink với kiến trúc hiện tại.
+Khi thêm playlist Spotify, bot lấy toàn bộ các trang track từ Spotify Web API, resolve từng bài qua Lavalink và báo rõ số bài đã thêm cùng các bài không resolve được.
