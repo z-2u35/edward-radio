@@ -323,6 +323,7 @@ async function ensurePlayer(guild, channelId) {
   player.on('end', async (data) => {
     const state = stateFor(guild.id);
     console.log(`[Player:${guild.id}] Track kết thúc: ${data?.reason || 'unknown'}`);
+    if (data?.reason === 'loadFailed') return;
     state.playing = false;
     setTimeout(() => playNext(guild.id).catch((error) => {
       console.error(`[Player:${guild.id}] Không thể phát track kế tiếp:`, error);
@@ -331,6 +332,7 @@ async function ensurePlayer(guild, channelId) {
   player.on('exception', async (error) => {
     console.error(`[Player:${guild.id}] Track exception:`, error);
     const state = stateFor(guild.id);
+    const failedTrack = state.current;
     state.playing = false;
     state.consecutiveFailures += 1;
     if (state.mode === 'radio' && state.consecutiveFailures >= 3) {
@@ -338,6 +340,16 @@ async function ensurePlayer(guild, channelId) {
       await saveState();
       console.error(`[Player:${guild.id}] Dừng radio sau ${state.consecutiveFailures} lỗi liên tiếp.`);
       return;
+    }
+    if (state.mode === 'queue') {
+      state.current = null;
+      await saveState();
+      if (state.textChannelId && failedTrack?.title) {
+        const channel = await client.channels.fetch(state.textChannelId).catch(() => null);
+        if (channel?.isTextBased()) {
+          await channel.send(`⚠️ Không thể tải audio: **${failedTrack.title}**. Đã bỏ qua track lỗi.`).catch(() => {});
+        }
+      }
     }
     setTimeout(() => playNext(guild.id).catch((nextError) => {
       console.error(`[Player:${guild.id}] Không thể phục hồi player:`, nextError);
