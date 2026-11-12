@@ -615,9 +615,8 @@ async function queueDashboardReply(target) {
 
 async function handleQueueButton(interaction) {
   const state = stateFor(interaction.guild.id);
-  const memberChannelId = interaction.member?.voice?.channelId;
-  if (!state.channelId || memberChannelId !== state.channelId) {
-    return interaction.reply({ content: '❌ Bạn phải ở cùng phòng thoại với bot.', ephemeral: true });
+  if (!state.channelId) {
+    return interaction.reply({ content: '❌ Bot hiện chưa ở trong phòng thoại.', ephemeral: true });
   }
   const player = shoukaku.players.get(interaction.guild.id);
   const dashboardOnly = interaction.customId === 'queue_refresh' || interaction.customId.startsWith('queue_page_');
