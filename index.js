@@ -66,6 +66,7 @@ async function waitForLavalink(timeoutMs = LAVALINK_WAIT_TIMEOUT) {
 const guildStates = new Map();
 let spotifyToken = null;
 let spotifyTokenExpiresAt = 0;
+let spotifyAuthLogged = false;
 
 function stateFor(guildId) {
   if (!guildStates.has(guildId)) {
@@ -140,6 +141,10 @@ async function getSpotifyToken() {
   const data = await response.json();
   spotifyToken = data.access_token;
   spotifyTokenExpiresAt = Date.now() + Math.max(30, data.expires_in - 60) * 1000;
+  if (!spotifyAuthLogged) {
+    spotifyAuthLogged = true;
+    console.log('[Spotify] OAuth Client Credentials thành công (token không được ghi log).');
+  }
   return spotifyToken;
 }
 
@@ -665,7 +670,7 @@ shoukaku.on('error', (name, error) => {
   console.error(`[Lavalink:${name}] ${error?.stack || error?.message || error}`);
 });
 shoukaku.on('disconnect', (name, count) => console.warn(`[Lavalink:${name}] Ngắt kết nối (${count}).`));
-shoukaku.on('ready', (name) => console.log(`[Lavalink:${name}] Sẵn sàng.`));
+shoukaku.on('ready', (name) => console.log(`[Lavalink:${name}] Sẵn sàng; YouTube OAuth do Lavalink quản lý.`));
 shoukaku.on('debug', (message) => console.debug(`[Lavalink] ${message}`));
 
 client.on('clientReady', async () => {
@@ -791,6 +796,7 @@ process.on('uncaughtException', (error) => console.error('[Uncaught Exception]',
   if (!process.env.DISCORD_TOKEN || !process.env.DISCORD_CLIENT_ID) {
     throw new Error('Thiếu DISCORD_TOKEN hoặc DISCORD_CLIENT_ID trong .env.');
   }
+  console.log(`[Config] Spotify OAuth: ${process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET ? 'đã cấu hình' : 'chưa cấu hình'}; Lavalink: ${nodes[0].url}`);
   await loadState();
   await client.login(process.env.DISCORD_TOKEN);
 })().catch((error) => {
