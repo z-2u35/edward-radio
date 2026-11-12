@@ -80,6 +80,7 @@ function stateFor(guildId) {
       mode: 'queue',
       station: null,
       playing: false,
+      starting: false,
       transitioning: false,
       consecutiveFailures: 0,
       textChannelId: null,
@@ -493,6 +494,7 @@ async function handleJoin(target, requestedChannel = null, pendingReply = null) 
   const channel = requestedVoiceChannel(guild, target.member, requestedChannel);
   if (!channel) throw new Error('Chọn room hoặc vào một phòng thoại trước.');
   const state = stateFor(guild.id);
+  state.textChannelId = target.channel?.id || state.textChannelId;
   const wasSameChannel = state.channelId === channel.id;
   await ensurePlayer(guild, channel.id);
   state.channelId = channel.id;
@@ -500,11 +502,36 @@ async function handleJoin(target, requestedChannel = null, pendingReply = null) 
     state.invitedByUserId = target.user?.id || target.author?.id;
   }
   await saveState();
-  if (!state.playing) {
-    await startRadio(guild, 'lofi', channel.id);
-  }
   const content = `✅ Đã vào <#${channel.id}>. Chỉ người mời bot mới có thể dùng /leave hoặc edl.`;
-  return pendingReply ? pendingReply.edit(content) : reply(target, content);
+  const response = pendingReply ? pendingReply.edit(content) : reply(target, content);
+  await response;
+
+  if (!state.playing && !state.starting) {
+    state.starting = true;
+    await saveState();
+    startRadio(guild, 'lofi', channel.id)
+      .then(async () => {
+        state.starting = false;
+        await saveState();
+        if (state.textChannelId) {
+          const textChannel = await client.channels.fetch(state.textChannelId).catch(() => null);
+          if (textChannel?.isTextBased()) await textChannel.send('📻 Đang phát Lofi.').catch(() => {});
+        }
+      })
+      .catch(async (error) => {
+        state.starting = false;
+        await saveState();
+        console.error(`[Radio:${guild.id}] Không thể tự phát Lofi sau khi join:`, error);
+        if (state.textChannelId) {
+          const textChannel = await client.channels.fetch(state.textChannelId).catch(() => null);
+          if (textChannel?.isTextBased()) {
+            await textChannel.send(`⚠️ Đã vào room nhưng chưa phát được Lofi: ${error.message}`).catch(() => {});
+          }
+        }
+      });
+  }
+
+  return response;
 }
 
 async function handleLeave(target) {
