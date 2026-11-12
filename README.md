@@ -132,3 +132,28 @@ edl
 Spotify dùng Web API để lấy metadata rồi tìm audio tương ứng qua Lavalink; Spotify không cung cấp audio stream trực tiếp cho bot.
 
 Khi thêm playlist Spotify, bot lấy toàn bộ các trang track từ Spotify Web API, resolve từng bài qua Lavalink và báo rõ số bài đã thêm cùng các bài không resolve được.
+
+## Deploy trên Railway
+
+Railway cần hai service trong cùng một project:
+
+1. **Lavalink**: tạo service từ image `ghcr.io/lavalink-devs/lavalink:4`, mount file `lavalink/application.yml` từ một volume/secret phù hợp, và đặt `server.password`.
+2. **Edward Radio**: deploy repository này. Railway sẽ dùng `Dockerfile` và `railway.toml` có sẵn.
+
+Trong service bot đặt các biến:
+
+```env
+DISCORD_TOKEN=...
+DISCORD_CLIENT_ID=...
+DISCORD_GUILD_ID=...
+LAVALINK_HOST=<private-domain-cua-service-lavalink>
+LAVALINK_PORT=2333
+LAVALINK_PASSWORD=<cung-gia-tri-voi-lavalink>
+LAVALINK_SECURE=false
+SPOTIFY_CLIENT_ID=...
+SPOTIFY_CLIENT_SECRET=...
+```
+
+Hai service phải dùng cùng một Railway project/private network. Không expose Lavalink public nếu bot dùng private domain. Trong Lavalink service, port nội bộ vẫn là `2333`; nếu dùng YouTube OAuth, lưu `refreshToken` trong config/secret của service Lavalink, không commit vào GitHub.
+
+Railway Free chỉ bao gồm `$1/tháng` credit và tối đa `0.5 GB` cho mỗi service; không đủ tin cậy để chạy bot + Lavalink 24/7. Free Trial có `$5` dùng một lần trong 30 ngày. Chạy 24/7 thực tế cần Hobby `$5/tháng` hoặc dùng lại Google Cloud/Oracle Always Free.
