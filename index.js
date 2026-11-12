@@ -434,7 +434,13 @@ function requestedVoiceChannel(guild, member, requestedChannel = null) {
   if (member?.voice?.channel) return member.voice.channel;
   const state = stateFor(guild.id);
   if (state.channelId) return guild.channels.cache.get(state.channelId) || null;
-  return null;
+  if (process.env.DEFAULT_VOICE_CHANNEL_ID) {
+    const configured = guild.channels.cache.get(process.env.DEFAULT_VOICE_CHANNEL_ID);
+    if (configured?.isVoiceBased()) return configured;
+  }
+  return guild.channels.cache.find((channel) =>
+    channel.isVoiceBased() && channel.joinable !== false
+  ) || null;
 }
 
 function voiceChannel(interaction) {
@@ -455,6 +461,9 @@ async function handleJoin(target, requestedChannel = null) {
     state.invitedByUserId = target.user?.id || target.author?.id;
   }
   await saveState();
+  if (!state.playing) {
+    await startRadio(guild, 'lofi', channel.id);
+  }
   return reply(target, `✅ Đã vào <#${channel.id}>. Chỉ người mời bot mới có thể dùng /leave hoặc edl.`);
 }
 

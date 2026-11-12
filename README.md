@@ -75,7 +75,7 @@ Kết quả phải có `"loadType":"search"`. Nếu là `empty` hoặc `error`, 
 
 | Lệnh | Tác dụng |
 | --- | --- |
-| `/join room:<room>` | Vào room chỉ định; bỏ trống room để dùng voice hiện tại |
+| `/join room:<room>` | Vào room chỉ định và tự phát Lofi; bỏ trống room để dùng voice hiện tại hoặc `DEFAULT_VOICE_CHANNEL_ID` |
 | `/leave` | Rời room; chỉ người đã mời bot vào room mới dùng được |
 | `/play query:<query>` | Thêm tên bài, URL YouTube hoặc Spotify vào queue; mode mặc định là queue |
 | `/play mode:station station:<station>` | Phát `lofi`, `chillsynth`, `jazz` hoặc `piano` |
@@ -87,6 +87,7 @@ Kết quả phải có `"loadType":"search"`. Nếu là `empty` hoặc `error`, 
 | `/stop` | Dừng và rời phòng, cũng yêu cầu quyền của người mời |
 
 Prefix tương ứng: `edj [#room]`, `edl`, `edp <query>`, `eddlall` xóa toàn bộ queue, `eddl <n>` xóa bài ở vị trí `n`.
+Nếu gọi `edj` từ text channel khi không ở voice, điền `DEFAULT_VOICE_CHANNEL_ID` trong `.env` hoặc chỉ rõ `edj #voice-room`.
 
 ## Test trên Google Cloud
 
