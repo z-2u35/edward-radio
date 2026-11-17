@@ -187,10 +187,12 @@ async function spotifyTracks(reference) {
     }];
   }
 
-  const first = await spotifyRequest(`${reference.type}s/${reference.id}`);
+  const first = reference.type === 'playlist'
+    ? await spotifyRequest(`playlists/${reference.id}/tracks?limit=100`)
+    : await spotifyRequest(`${reference.type}s/${reference.id}`);
   const tracks = [];
-  let items = first.tracks?.items || [];
-  let next = first.tracks?.next;
+  let items = reference.type === 'playlist' ? first.items || [] : first.tracks?.items || [];
+  let next = reference.type === 'playlist' ? first.next : first.tracks?.next;
   while (next) {
     const response = await fetch(next, { headers: { Authorization: `Bearer ${await getSpotifyToken()}` } });
     if (!response.ok) throw new Error(`Spotify pagination thất bại (${response.status}).`);
@@ -209,6 +211,7 @@ async function spotifyTracks(reference) {
       artworkUrl: track.album?.images?.[0]?.url || first.images?.[0]?.url || null
     });
   }
+  console.log(`[Spotify] ${reference.type}: nhận được ${tracks.length} track metadata.`);
   return tracks;
 }
 
@@ -243,30 +246,40 @@ async function resolveRequest(input) {
     const reference = spotifyReference(input);
     if (!reference) throw new Error('Link Spotify không hợp lệ.');
     const spotifyItems = await spotifyTracks(reference);
+    if (!spotifyItems.length) throw new Error('Spotify playlist không có track công khai hoặc playlist không tồn tại.');
     const resolved = [];
     const skipped = [];
-    for (const item of spotifyItems) {
-      try {
-        const tracks = await resolveSearchTrack(item.query);
-        if (!tracks[0]) {
+    const itemsToResolve = spotifyItems.slice(0, MAX_QUEUE_SIZE);
+    let nextIndex = 0;
+    const resolveWorker = async () => {
+      while (nextIndex < itemsToResolve.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const item = itemsToResolve[index];
+        try {
+          const tracks = await resolveSearchTrack(item.query);
+          if (!tracks[0]) throw new Error('Không tìm thấy bản audio tương ứng.');
+          resolved[index] = {
+            encoded: tracks[0].encoded,
+            title: item.title,
+            uri: tracks[0].info?.uri || null,
+            duration: item.duration || tracks[0].info?.length || 0,
+            artworkUrl: item.artworkUrl,
+            requester: null
+          };
+        } catch (error) {
           skipped.push(item.title);
-          continue;
+          console.warn(`[Spotify] Bỏ qua "${item.title}": ${error.message}`);
         }
-        resolved.push({
-          encoded: tracks[0].encoded,
-          title: item.title,
-          uri: tracks[0].info?.uri || null,
-          duration: item.duration || tracks[0].info?.length || 0,
-          artworkUrl: item.artworkUrl,
-          requester: null
-        });
-      } catch (error) {
-        skipped.push(item.title);
-        console.warn(`[Spotify] Bỏ qua "${item.title}": ${error.message}`);
       }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, itemsToResolve.length) }, resolveWorker));
+    const resolvedTracks = resolved.filter(Boolean);
+    if (!resolvedTracks.length) {
+      throw new Error('Spotify lấy được metadata nhưng Lavalink không resolve được track nào. Kiểm tra YouTube OAuth.');
     }
     return {
-      tracks: resolved,
+      tracks: resolvedTracks,
       skipped,
       playlistName: reference.type === 'track' ? null : 'Spotify collection'
     };
