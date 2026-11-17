@@ -9,7 +9,7 @@ Discord Music Bot dùng **Discord.js v14 + Lavalink v4 + Shoukaku**. Lavalink đ
 - Queue, shuffle, skip, tổng thời lượng, volume 1-100 và tự động chuyển bài.
 - Radio Lofi, Chillsynth, Smooth Jazz, Peaceful Piano qua URL stream cấu hình trong `.env`.
 - Chế độ treo phòng 24/7 và lưu trạng thái vào `state.json`.
-- Slash commands và prefix aliases: `/join`, `/leave`, `edj`, `edl`, `edp`, `edsf`, `eds`, `edq`, `eddlall`, `eddl <n>`, `edt`, `edvol`, `ed247`, `edstop`.
+- Slash commands và prefix aliases: `/join`, `/leave`, `/loop`, `edj`, `edl`, `edp`, `edloop`, `edsf`, `eds`, `edq`, `eddlall`, `eddl <n>`, `edt`, `edvol`, `ed247`, `edstop`.
 
 ## Cài đặt
 
@@ -92,6 +92,7 @@ Kết quả phải có `"loadType":"search"`. Nếu là `empty` hoặc `error`, 
 | `/leave` | Rời room; chỉ người đã mời bot vào room mới dùng được |
 | `/play query:<query>` | Thêm tên bài, URL YouTube hoặc Spotify vào queue; mode mặc định là queue |
 | `/play mode:station station:<station>` | Phát `lofi`, `chillsynth`, `jazz` hoặc `piano` |
+| `/loop mode:<off/track/queue>` | Tắt loop, lặp bài hiện tại hoặc lặp toàn bộ queue |
 | `/shuffle`, `/skip`, `/queue`, `/total` | Quản lý hàng đợi |
 | `/deleteall` | Xóa toàn bộ bài đang chờ, không dừng bài hiện tại |
 | `/delete position:<n>` | Xóa bài ở vị trí `n` trong hàng đợi |
@@ -99,7 +100,7 @@ Kết quả phải có `"loadType":"search"`. Nếu là `empty` hoặc `error`, 
 | `/247` | Bật/tắt treo phòng |
 | `/stop` | Dừng và rời phòng, cũng yêu cầu quyền của người mời |
 
-Prefix tương ứng: `edj [#room]`, `edl`, `edp <query>`, `eddlall` xóa toàn bộ queue, `eddl <n>` xóa bài ở vị trí `n`.
+Prefix tương ứng: `edj [#room]`, `edl`, `edp <query>`, `edloop` đổi lần lượt `off → track → queue`, `eddlall` xóa toàn bộ queue, `eddl <n>` xóa bài ở vị trí `n`.
 Nếu gọi `edj` từ text channel khi không ở voice, điền `DEFAULT_VOICE_CHANNEL_ID` trong `.env` hoặc chỉ rõ `edj #voice-room`.
 
 ## Test trên Google Cloud
@@ -124,6 +125,8 @@ Test lần lượt:
 /play query:lofi hip hop radio
 /play query:https://www.youtube.com/watch?v=...
 /play query:https://open.spotify.com/track/...
+/play query:https://open.spotify.com/playlist/2V8vXWkTNn0zzIBwPKm2vo?si=...
+edloop
 edj #voice-room
 edp tên bài hát
 edl

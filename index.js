@@ -84,8 +84,10 @@ function stateFor(guildId) {
       volume: DEFAULT_VOLUME,
       stay247: false,
       mode: 'queue',
+      loop: 'off',
       station: null,
       playing: false,
+      skipRequested: false,
       starting: false,
       transitioning: false,
       consecutiveFailures: 0,
@@ -110,6 +112,14 @@ function duration(ms) {
 function totalDuration(state) {
   return (state.queue.reduce((sum, track) => sum + (track.duration || 0), 0)
     + (state.current?.duration || 0));
+}
+
+function loopLabel(loop) {
+  return loop === 'track' ? '🔂 Bài hiện tại' : loop === 'queue' ? '🔁 Queue' : '➡️ Tắt';
+}
+
+function nextLoop(loop) {
+  return loop === 'off' ? 'track' : loop === 'track' ? 'queue' : 'off';
 }
 
 function isUrl(value) {
@@ -331,6 +341,13 @@ async function ensurePlayer(guild, channelId) {
     const state = stateFor(guild.id);
     console.log(`[Player:${guild.id}] Track kết thúc: ${data?.reason || 'unknown'}`);
     if (data?.reason === 'loadFailed') return;
+    const skipRequested = state.skipRequested;
+    state.skipRequested = false;
+    if (!skipRequested && state.mode === 'queue' && state.current?.encoded && state.loop !== 'off') {
+      const repeatedTrack = { ...state.current };
+      if (state.loop === 'track') state.queue.unshift(repeatedTrack);
+      else state.queue.push(repeatedTrack);
+    }
     state.playing = false;
     setTimeout(() => playNext(guild.id).catch((error) => {
       console.error(`[Player:${guild.id}] Không thể phát track kế tiếp:`, error);
@@ -553,6 +570,7 @@ async function handleLeave(target) {
   state.current = null;
   state.playing = false;
   state.mode = 'queue';
+  state.loop = 'off';
   state.station = null;
   state.stay247 = false;
   state.channelId = null;
@@ -569,6 +587,7 @@ async function handleStop(target) {
   state.current = null;
   state.playing = false;
   state.mode = 'queue';
+  state.loop = 'off';
   state.station = null;
   state.stay247 = false;
   await saveState();
@@ -604,6 +623,7 @@ function queueDashboard(state, requestedPage = 0, notice = '') {
   const status = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`queue_page_prev:${page}`).setLabel('‹ Trang trước').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
     new ButtonBuilder().setCustomId(`queue_page_next:${page}`).setLabel('Trang sau ›').setStyle(ButtonStyle.Secondary).setDisabled(page >= pageCount - 1),
+    new ButtonBuilder().setCustomId('queue_loop').setLabel(`🔁 ${loopLabel(state.loop)}`).setStyle(state.loop === 'off' ? ButtonStyle.Secondary : ButtonStyle.Success),
     new ButtonBuilder().setCustomId('queue_leave').setLabel('Rời phòng').setStyle(ButtonStyle.Danger)
   );
 
@@ -614,7 +634,8 @@ function queueDashboard(state, requestedPage = 0, notice = '') {
       .addFields(
         { name: '🔊 Volume', value: `\`${state.volume}%\``, inline: true },
         { name: '📚 Tổng queue', value: `\`${state.queue.length} bài\``, inline: true },
-        { name: '🎚️ Chế độ', value: `\`${state.mode}\``, inline: true }
+        { name: '🎚️ Chế độ', value: `\`${state.mode}\``, inline: true },
+        { name: '🔁 Loop', value: `\`${loopLabel(state.loop)}\``, inline: true }
       )
       .setFooter({ text: `Edward Radio • Bảng điều khiển phát nhạc • ${state.queue.length} bài` })
       .setTimestamp();
@@ -656,7 +677,12 @@ async function handleQueueButton(interaction) {
       if (state.current?.encoded) await playEncoded(player, state.current.encoded, state.volume);
       break;
     case 'queue_next':
+      state.skipRequested = true;
       await player.stopTrack();
+      break;
+    case 'queue_loop':
+      state.loop = nextLoop(state.loop);
+      await saveState();
       break;
     case 'queue_volume_down':
       state.volume = Math.max(1, state.volume - 10);
@@ -728,6 +754,13 @@ function commandBuilders() {
     new SlashCommandBuilder().setName('total').setDescription('Xem tổng thời lượng'),
     new SlashCommandBuilder().setName('volume').setDescription('Chỉnh âm lượng')
       .addIntegerOption((option) => option.setName('value').setDescription('1-100').setMinValue(1).setMaxValue(100).setRequired(true)),
+    new SlashCommandBuilder().setName('loop').setDescription('Chọn chế độ lặp')
+      .addStringOption((option) => option.setName('mode').setDescription('Tắt, lặp bài hoặc lặp queue').setRequired(false)
+        .addChoices(
+          { name: 'Tắt', value: 'off' },
+          { name: 'Lặp bài hiện tại', value: 'track' },
+          { name: 'Lặp toàn bộ queue', value: 'queue' }
+        )),
     new SlashCommandBuilder().setName('247').setDescription('Bật/tắt treo phòng 24/7'),
     new SlashCommandBuilder().setName('stop').setDescription('Dừng và rời phòng')
   ].map((command) => command.toJSON());
@@ -807,6 +840,7 @@ async function handleCommand(target, command, args) {
   if (command === 'skip') {
     const player = shoukaku.players.get(target.guild.id);
     if (!player) throw new Error('Bot chưa phát nhạc.');
+    state.skipRequested = true;
     await player.stopTrack();
     return reply(target, '⏭️ Đã bỏ qua bài hiện tại.');
   }
@@ -839,6 +873,15 @@ async function handleCommand(target, command, args) {
     if (player) await player.setGlobalVolume(value);
     await saveState();
     return reply(target, `🔊 Âm lượng: **${value}%**.`);
+  }
+  if (command === 'loop') {
+    const requestedLoop = args[0]?.toLowerCase();
+    if (requestedLoop && !['off', 'track', 'queue'].includes(requestedLoop)) {
+      throw new Error('Loop phải là `off`, `track` hoặc `queue`.');
+    }
+    state.loop = requestedLoop || nextLoop(state.loop);
+    await saveState();
+    return queueDashboardReply(target);
   }
   if (command === '247') {
     state.stay247 = !state.stay247;
@@ -888,6 +931,8 @@ client.on('interactionCreate', async (interaction) => {
       ? [interaction.options.getString('query') || interaction.options.getString('station')]
       : interaction.commandName === 'volume'
         ? [String(interaction.options.getInteger('value', true))]
+        : interaction.commandName === 'loop'
+          ? [interaction.options.getString('mode') || '']
         : interaction.commandName === 'delete'
           ? [String(interaction.options.getInteger('position', true))]
         : [];
@@ -942,6 +987,7 @@ client.on('messageCreate', async (message) => {
     eddl: 'delete',
     edt: 'total',
     edvol: 'volume',
+    edloop: 'loop',
     ed247: '247',
     edstop: 'stop'
   };
